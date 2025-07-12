@@ -29,7 +29,10 @@ class Config:
     TEST_PATH = "~/.kaggle/sensor-data/test.csv"
     TEST_DEMOGRAPHICS_PATH = "~/.kaggle/sensor-data/test_demographics.csv"
     EXPORT_DIR =  "/Users/mathieuisoard/Documents/kaggle-competitions/CMI-sensor-competition/data"                                  
-    EXPORT_MODELS_PATH =  "/Users/mathieuisoard/Documents/kaggle-competitions/CMI-sensor-competition/models"                                  
+    EXPORT_MODELS_PATH =  "/Users/mathieuisoard/Documents/kaggle-competitions/CMI-sensor-competition/models"  
+
+    os.makedirs(EXPORT_DIR, exist_ok=True)                                 
+    os.makedirs(EXPORT_MODELS_PATH, exist_ok=True)                                 
     
     # Training parameters
     SEED = 42
