@@ -85,7 +85,7 @@ def train_model(model, train_loader, val_loader, optimizer, criterion, epochs, d
     return best_score
 
 
-def soft_cross_entropy(pred_logits, soft_targets, class_weight, bfrb_classes, gamma = 0.5):
+def soft_cross_entropy(pred_logits, soft_targets, class_weight, bfrb_classes, gamma = 0.7):
     mask_bfrb_classes = np.array([idx in bfrb_classes.numpy() for idx in range(len(class_weight))])
     outputs = torch.nn.functional.softmax(pred_logits, dim=1)
 
@@ -115,4 +115,4 @@ def soft_cross_entropy(pred_logits, soft_targets, class_weight, bfrb_classes, ga
     weighted_kl = F.kl_div(targets_log, soft_targets, reduction='batchmean')
     #weighted_kl = weighted_kl * class_weight.to(DEVICE).unsqueeze(0)
     #weighted_kl[:, idx_bfrb_classes] *=  boost_factor
-    return gamma * weighted_kl + (1. - gamma) * brfb_loss#.sum(dim = 1).mean() #
+    return  gamma * weighted_kl + (1. - gamma) * brfb_loss #gamma * weighted_kl + (1. - gamma) * brfb_loss#.sum(dim = 1).mean() #

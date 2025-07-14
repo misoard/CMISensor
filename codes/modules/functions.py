@@ -14,6 +14,7 @@ from tqdm import tqdm
 from sklearn.metrics import f1_score,  recall_score
 import torch
 import polars as pl
+from pathlib import Path
 
 
 warnings.filterwarnings('ignore')
@@ -24,14 +25,33 @@ warnings.filterwarnings('ignore')
 
 class Config: 
     """Central configuration class for training and data parameters"""
+
+    path = Path(os.getcwd())
+    parts = list(path.parts)
+
+    # Optionally remove the root slash if desired
+    if parts[0] == '/':
+        parts = parts[1:]
+
+    if parts[0] == 'Users':
+        # Paths for Kaggle environment
+        TRAIN_PATH = "~/.kaggle/sensor-data/train.csv"
+        TRAIN_DEMOGRAPHICS_PATH = "~/.kaggle/sensor-data/train_demographics.csv"
+        TEST_PATH = "~/.kaggle/sensor-data/test.csv"
+        TEST_DEMOGRAPHICS_PATH = "~/.kaggle/sensor-data/test_demographics.csv"
+        EXPORT_DIR =  "/Users/mathieuisoard/Documents/kaggle-competitions/CMI-sensor-competition/github/data"                                  
+        EXPORT_MODELS_PATH =  "/Users/mathieuisoard/Documents/kaggle-competitions/CMI-sensor-competition/github/models"  
     
-    # Paths for Kaggle environment
-    TRAIN_PATH = "~/.kaggle/sensor-data/train.csv"
-    TRAIN_DEMOGRAPHICS_PATH = "~/.kaggle/sensor-data/train_demographics.csv"
-    TEST_PATH = "~/.kaggle/sensor-data/test.csv"
-    TEST_DEMOGRAPHICS_PATH = "~/.kaggle/sensor-data/test_demographics.csv"
-    EXPORT_DIR =  "/Users/mathieuisoard/Documents/kaggle-competitions/CMI-sensor-competition/github/data"                                  
-    EXPORT_MODELS_PATH =  "/Users/mathieuisoard/Documents/kaggle-competitions/CMI-sensor-competition/github/models"  
+    elif parts[0] == 'home':
+        TRAIN_PATH = "/home/mathieuisoard/remote-github/sensor-data/train.csv"
+        TRAIN_DEMOGRAPHICS_PATH = "/home/mathieuisoard/remote-github/sensor-data/train_demographics.csv"
+        TEST_PATH = "/home/mathieuisoard/remote-github/sensor-data/test.csv"
+        TEST_DEMOGRAPHICS_PATH = "/home/mathieuisoard/remote-github/sensor-data/test_demographics.csv"
+        EXPORT_DIR =  "/home/mathieuisoard/remote-github/data"                                  
+        EXPORT_MODELS_PATH =  "/home/mathieuisoard/remote-github/models_from_gcloud" 
+    else:
+        print("NEW ROOT DIRECTORY") 
+
 
     os.makedirs(EXPORT_DIR, exist_ok=True)                                 
     os.makedirs(EXPORT_MODELS_PATH, exist_ok=True)                                 

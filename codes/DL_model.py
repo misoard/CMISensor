@@ -18,7 +18,7 @@ import sys
 
 print("")
 print("======== COMMENTS ========")
-print("Corrected loss function to add BRFB specific loss, gamma = 0.5")
+print(" normal loss and BRFB loss only, gamma = 0.7")
 print("+ balanced class weights for random sampling but not for loss function")
 print("-------------------------")
 print("")

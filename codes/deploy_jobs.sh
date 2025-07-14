@@ -31,7 +31,7 @@ run_job () {
 
 mkdir -p logs  # Optional: create a logs directory for outputs
 
-number_exp=21
+number_exp=22
 
 feature_sets=(
     # "acc_x acc_y acc_z rot_x rot_y rot_z rot_w"
