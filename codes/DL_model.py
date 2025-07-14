@@ -199,8 +199,8 @@ for fold, (train_idx, val_idx) in enumerate(sgkf.split(X, y, groups)):
 
         train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, sampler=tracking_sampler)
     
-    val_ds = SensorDataset(X_val, y_val, imu_dim = 7, training=False) ### VALIDATION DATA (NO AUG, NO MixUp)
-    val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False)
+        val_ds = SensorDataset(X_val, y_val, imu_dim = 7, training=False) ### VALIDATION DATA (NO AUG, NO MixUp)
+        val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False)
 
 
     if TRAIN:
