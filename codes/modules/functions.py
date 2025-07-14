@@ -19,7 +19,7 @@ import polars as pl
 warnings.filterwarnings('ignore')
 
 # =============================================================================
-# CONFIGURATION
+# CONFIGURATION --
 # =============================================================================
 
 class Config: 
