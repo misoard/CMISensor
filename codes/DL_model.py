@@ -13,9 +13,13 @@ from modules.class_models import *
 from modules.training_functions import *
 from modules.competition_metric import CompetitionMetric
 
+import sys
+
+
 print("")
 print("======== COMMENTS ========")
-print("Smooth target labels with eps = 0.2")
+print("Corrected loss function to add BRFB specific loss, gamma = 0.5")
+print("+ balanced class weights for random sampling but not for loss function")
 print("-------------------------")
 print("")
 
@@ -34,20 +38,25 @@ file_path_cols = os.path.join(Config.EXPORT_DIR, "cols.pkl")
 file_path_splits = os.path.join(Config.EXPORT_DIR, "split_ids.pkl")
 
 
-selected_features = [
-    'acc_x','acc_y','acc_z',#,'rot_x', 'rot_y', 'rot_z', 'rot_w', 
-    'rotvec_x', 'rotvec_y', 'rotvec_z', 
-    'linear_acc_x', 'linear_acc_y', 'linear_acc_z', 
-    #'linear_acc_x_FFT', 'linear_acc_y_FFT', 'linear_acc_z_FFT', 
-    #'acc_norm_world', 
-    # 'acc_norm', 'linear_acc_norm', 
-    # 'acc_norm_jerk', 'linear_acc_norm_jerk', 
-    #'angle_rad', 'angular_speed', 
-    # 'rot_angle', 'rot_angle_vel', 'angular_speed', 
-    'ang_vel_x', 'ang_vel_y', 'ang_vel_z', 'ang_dist',
-    # 'ang_vel_x_FFT', 'ang_vel_y_FFT', 'ang_vel_z_FFT', 
-    'phase_adj',
-    ] 
+selected_features = sys.argv[1:]
+
+if len(selected_features) == 0:
+    selected_features = [
+        'acc_x','acc_y','acc_z',#,'rot_x', 'rot_y', 'rot_z', 'rot_w', 
+        'rotvec_x', 'rotvec_y', 'rotvec_z', 
+        'linear_acc_x', 'linear_acc_y', 'linear_acc_z', 
+        #'linear_acc_x_FFT', 'linear_acc_y_FFT', 'linear_acc_z_FFT', 
+        #'acc_norm_world', 
+        # 'acc_norm', 'linear_acc_norm', 
+        # 'acc_norm_jerk', 'linear_acc_norm_jerk', 
+        #'angle_rad', 'angular_speed', 
+        # 'rot_angle', 'rot_angle_vel', 'angular_speed', 
+        'ang_vel_x', 'ang_vel_y', 'ang_vel_z', 'ang_dist',
+        # 'ang_vel_x_FFT', 'ang_vel_y_FFT', 'ang_vel_z_FFT', 
+        'phase_adj',
+        ] 
+
+print("Features:", selected_features)
 
 
 # ---------------- LOAD DATA ------------------------
@@ -110,9 +119,11 @@ if len(np.unique(nan_indices[0].numpy())) > 0:
 
 print(f"Data shape (X, y): {X.shape, y.shape}")
 
-cw_vals = compute_class_weight('balanced', classes=list(split_ids['classes'].keys()), y=y.numpy())  ## Class weights to handle imbalance
-class_weight = torch.from_numpy(cw_vals).float()                                                    ## class weights as torch tensor
+# cw_vals = compute_class_weight('balanced', classes=list(split_ids['classes'].keys()), y=y.numpy())  ## Class weights to handle imbalance
+# class_weight = torch.from_numpy(cw_vals).float()                                                    ## class weights as torch tensor
 
+class_weight = 0.7 * torch.ones(len(split_ids['classes'].keys()))
+class_weight[bfrb_classes] = 2.
 
 # ------------------------------- TRAINING ---------------------------------
 
@@ -128,6 +139,7 @@ groups = [split_ids['train']['train_sequence_subject'][seq_id] for seq_id in tra
 best_scores = []
 for fold, (train_idx, val_idx) in enumerate(sgkf.split(X, y, groups)):
     print(f"\n===== FOLD {fold+1}/{N_SPLITS} =====\n")
+    reset_seed(SEED)
 
     # Split data
     X_tr, X_val = X[train_idx], X[val_idx]
@@ -176,11 +188,14 @@ for fold, (train_idx, val_idx) in enumerate(sgkf.split(X, y, groups)):
     print(" ----------- CLASS INBALANCE SAMPLER (WeightedRandomSampler) ---------") 
     class_counts = np.bincount(y_tr.numpy())
     print(f"Number of samples per class: {Counter(y_tr.numpy())}\n")
-    class_weights = 1. / class_counts
-    sample_weights = class_weights[y_tr.numpy()]
+    class_weights_balanced = 1. / class_counts
+    sample_weights = class_weights_balanced[y_tr.numpy()]
     sampler = WeightedRandomSampler(weights=sample_weights, num_samples=len(sample_weights) , replacement=True)
     tracking_sampler = TrackingSampler(sampler)
+
     sampled_indices = list(sampler)
+    sampled_labels = y_tr[sampled_indices]
+    print(Counter(sampled_labels.numpy()))
 
     train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, sampler=tracking_sampler)
     val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False)
