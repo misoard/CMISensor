@@ -21,7 +21,7 @@ def train_model(model, train_loader, val_loader, optimizer, criterion, epochs, d
             inputs, targets = inputs.to(device), targets.to(device)
             optimizer.zero_grad()
             outputs = model(inputs) #, phase_adj = inputs[:, :,  -1]
-            targets = targets * (1 - 0.1) + (0.1 / len(class_weight))
+            targets = targets * (1 - 0.2) + (0.2 / len(class_weight))
             loss = criterion(outputs, targets, class_weight, bfrb_classes)
             loss.backward()
             optimizer.step()
@@ -66,6 +66,12 @@ def train_model(model, train_loader, val_loader, optimizer, criterion, epochs, d
         early_stopper(val_acc, model)
         if early_stopper.best_score > best_score:
             best_score = early_stopper.best_score
+            name = "best_model"
+            if fold is not None:
+                name += f"_fold_{fold}.pth"
+            else:
+                name += ".pth"
+            torch.save(early_stopper.best_model_state, os.path.join(Config.EXPORT_MODELS_PATH, name ))
 
         if early_stopper.early_stop:
             print("Training stopped early.")
@@ -75,12 +81,6 @@ def train_model(model, train_loader, val_loader, optimizer, criterion, epochs, d
         print(f"Epoch {epoch}/{epochs} - Train Loss: {train_loss:.4f}, Acc: {train_acc:.4f}, Bin. : {train_binary_recall:.4f}, Macro: {train_macro_f1:.4f} | Val Loss: {val_loss:.4f}, Acc: {val_acc:.4f}, Bin. : {val_binary_recall:.4f}, Macro: {val_macro_f1:.4f}")
 
 
-    name = "best_model"
-    if fold is not None:
-        name += f"_fold_{fold}.pth"
-    else:
-        name += ".pth"
-    torch.save(early_stopper.best_model_state, os.path.join(Config.EXPORT_MODELS_PATH, name ))
 
     return best_score
 
@@ -104,4 +104,4 @@ def soft_cross_entropy(pred_logits, soft_targets, class_weight, bfrb_classes, ga
     weighted_kl = F.kl_div(log_probs, soft_targets, reduction='batchmean')
     #weighted_kl = weighted_kl * class_weight.to(DEVICE).unsqueeze(0)
     #weighted_kl[:, idx_bfrb_classes] *=  boost_factor
-    return weighted_kl #+ gamma * binary_loss#.sum(dim = 1).mean() #
+    return weighted_kl + gamma * binary_loss#.sum(dim = 1).mean() #

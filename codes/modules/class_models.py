@@ -278,11 +278,7 @@ class MiniGestureClassifier(nn.Module):
         imu_feat = self.imu_encoder(imu)  # [B, hidden_dim, T]
 
         pooled = imu_feat.mean(dim=2)#   # [B, hidden_dim]
-        # if phase_adj is not None:
-        #     mask_phase = (torch.tensor(phase_adj, device=imu.device) > 0).long()
-        #     #mask_phase = downsample_mask(mask_phase, factor=4)
-        #     pooled = self.attn_pool(imu_feat, mask_phase) # imu_feat.mean(dim=2)#   # [B, hidden_dim]
-        # else:
+
         #pooled = self.attn_pool(imu_feat)
 
         out = self.classifier_head(pooled)  # [B, num_classes]

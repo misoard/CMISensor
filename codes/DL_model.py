@@ -15,7 +15,7 @@ from modules.competition_metric import CompetitionMetric
 
 print("")
 print("======== COMMENTS ========")
-print("Smooth target labels with eps = 0.1")
+print("Smooth target labels with eps = 0.2")
 print("-------------------------")
 print("")
 
@@ -27,10 +27,7 @@ ALPHA = 0.3
 LR = 1e-3
 
 SEED = Config.SEED
-np.random.seed(SEED)
-torch.manual_seed(SEED)
-torch.cuda.manual_seed(SEED)
-torch.cuda.manual_seed_all(SEED) 
+reset_seed(SEED)
 
 file_path_train = os.path.join(Config.EXPORT_DIR, "train_torch_tensors_from_wrapper_not_split.pt")
 file_path_cols = os.path.join(Config.EXPORT_DIR, "cols.pkl")
@@ -47,8 +44,7 @@ selected_features = [
     # 'acc_norm_jerk', 'linear_acc_norm_jerk', 
     #'angle_rad', 'angular_speed', 
     # 'rot_angle', 'rot_angle_vel', 'angular_speed', 
-    'ang_dist',
-    'ang_vel_x', 'ang_vel_y', 'ang_vel_z', 
+    'ang_vel_x', 'ang_vel_y', 'ang_vel_z', 'ang_dist',
     # 'ang_vel_x_FFT', 'ang_vel_y_FFT', 'ang_vel_z_FFT', 
     'phase_adj',
     ] 
@@ -124,6 +120,8 @@ sgkf = StratifiedGroupKFold(n_splits=N_SPLITS, shuffle=True, random_state = 39) 
 
 train_ids = np.array(split_ids['train']['train_sequence_ids']) #seq_id of data sequences 
 groups = [split_ids['train']['train_sequence_subject'][seq_id] for seq_id in train_ids] #subject_id of data_sequences
+
+# idx_spe_seq = np.where(train_ids == 'SEQ_000007')[0]
 
 
 ### LOOP FOR EACH TRAINING FOLD

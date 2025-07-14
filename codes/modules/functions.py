@@ -13,6 +13,8 @@ import pickle
 from tqdm import tqdm
 from sklearn.metrics import f1_score,  recall_score
 import torch
+import polars as pl
+
 
 warnings.filterwarnings('ignore')
 
@@ -28,8 +30,8 @@ class Config:
     TRAIN_DEMOGRAPHICS_PATH = "~/.kaggle/sensor-data/train_demographics.csv"
     TEST_PATH = "~/.kaggle/sensor-data/test.csv"
     TEST_DEMOGRAPHICS_PATH = "~/.kaggle/sensor-data/test_demographics.csv"
-    EXPORT_DIR =  "/Users/mathieuisoard/Documents/kaggle-competitions/CMI-sensor-competition/data"                                  
-    EXPORT_MODELS_PATH =  "/Users/mathieuisoard/Documents/kaggle-competitions/CMI-sensor-competition/models"  
+    EXPORT_DIR =  "/Users/mathieuisoard/Documents/kaggle-competitions/CMI-sensor-competition/github/data"                                  
+    EXPORT_MODELS_PATH =  "/Users/mathieuisoard/Documents/kaggle-competitions/CMI-sensor-competition/github/models"  
 
     os.makedirs(EXPORT_DIR, exist_ok=True)                                 
     os.makedirs(EXPORT_MODELS_PATH, exist_ok=True)                                 
@@ -153,6 +155,28 @@ def check_missing_values_quaternion(data_sequences):
     print(f"✓ number of seq_id with missing values in quaternion: {len(seq_id_quaternion_nan)}")
     print(f"✓ number of unnormalized quaternions for complete quaternions: {len(check_norm_quaternion)}")
     return seq_id_quaternion_nan
+
+
+def regularize_quaternions_per_sequence(data_sequence):
+    data_clean = data_sequence.copy()
+    quaternion_cols = [col for col in data_sequence.columns if col.startswith('rot_')]
+    nan_quat_cols = data_sequence[quaternion_cols].columns[data_sequence[quaternion_cols].isna().any()]
+    normalize_quat = data_sequence[quaternion_cols].pow(2).sum(axis = 1).mean()  
+    if nan_quat_cols.any():
+        data_clean[quaternion_cols] = handle_missing_values_quaternions(data_sequence[quaternion_cols])
+    if (not nan_quat_cols.any()) and normalize_quat < 0.99:
+        data_clean[quaternion_cols] = handle_missing_values_quaternions(data_sequence[quaternion_cols])
+
+    ### Check failed regularization
+    nan_quat_cols_clean = data_clean[quaternion_cols].columns[data_clean[quaternion_cols].isna().any()]
+    normalize_quat_clean = data_clean[quaternion_cols].pow(2).sum(axis = 1).mean() 
+    if nan_quat_cols_clean.any():
+        print("!!NaN values have been detected after regularisation!!")
+    if (not nan_quat_cols_clean.any()) and normalize_quat_clean < 0.99:
+        print("!!Not normalized quaternions have been detected after regularisation!!")
+    return data_clean
+
+
 
 def clean_and_check_quaternion(data):
     data_clean = data.copy()
@@ -596,7 +620,7 @@ def split_into_transition_and_gesture_phases(sequence_data, meta_cols):
     return sequence_data_split
 
 
-def wrapper_data( TRAIN = True, split = True ):
+def wrapper_data( TRAIN = True, split = False):
     if TRAIN:
         train_df = pd.read_csv(Config.TRAIN_PATH)
 
@@ -668,7 +692,7 @@ def wrapper_data( TRAIN = True, split = True ):
             data_sequence = add_gesture_phase(data_sequence)
             data_sequence = compute_acceleration_features(data_sequence)
             data_sequence = compute_angular_features(data_sequence)
-            data_sequence = compute_fft_features(data_sequence)
+            #data_sequence = compute_fft_features(data_sequence)
             #data_sequence = compute_theta_phi_features(data_sequence)
             #data_sequence = compute_corr_and_svd_features(data_sequence)
             data_sequence = manage_tof(data_sequence)
@@ -695,9 +719,9 @@ def wrapper_data( TRAIN = True, split = True ):
         print(f"all features have been generated")
         # global scaler
         #features_to_exclude = [f for f in fixed_order_features if ('svd' in f) or ('contribution_main_axis' in f) or ('f0' in f)]  # for example
-        features_to_exclude = [f for f in fixed_order_features if any(substr in f for substr in ['svd', 'phase_adj', 'contribution_main_axis', 'f0', 'f1', 'freqs'])]
+        features_to_exclude = [f for f in fixed_order_features if any(substr in f for substr in ['phase_adj'])]
         features_to_scale = [f for f in fixed_order_features if f not in features_to_exclude]
-
+        print(features_to_scale)
         all_features = np.concatenate( (meta_cols, fixed_order_features) )
         
         for f in train_df_clean.columns:
@@ -726,6 +750,7 @@ def wrapper_data( TRAIN = True, split = True ):
 
         X, y = build_train_test_data(train_sequences, cols)
         return X, y
+
 
 
 def get_info(data_sequences, demograph, seq_id, print_data = False):
@@ -787,7 +812,7 @@ def pad_and_truncate(X_batch, maxlen, padding_value=0.0, dtype=torch.float32):
 def build_train_test_data(data_sequences, cols, mask_gesture = False):
     X_batch, y_batch, len_seq = [], [], []
     features = np.concatenate( (cols['imu'], cols['thm'], cols['tof']) )
-    features_to_exclude = [f for f in features if any(substr in f for substr in ['svd', 'phase_adj', 'contribution_main_axis', 'f0', 'f1', 'freqs'])]
+    features_to_exclude = [f for f in features if any(substr in f for substr in ['phase_adj'])]
     features_to_scale = [f for f in features if f not in features_to_exclude]
 
     idx_to_scale = np.where(np.isin(features, features_to_scale))[0]
@@ -860,4 +885,11 @@ def competition_metric(y_true, y_pred) -> tuple:
     final_score = 0.5 * (binary_f1 + macro_f1)
     
     return final_score, binary_recall, macro_f1
+
+def reset_seed(seed=42):
+    np.random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
 
