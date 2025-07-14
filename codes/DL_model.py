@@ -4,9 +4,8 @@ from torch.utils.data import WeightedRandomSampler
 from torch.utils.data import DataLoader
 
 from sklearn.model_selection import StratifiedGroupKFold
-from sklearn.utils.class_weight import compute_class_weight
+#from sklearn.utils.class_weight import compute_class_weight
 
-from collections import Counter
 
 from modules.functions import *
 from modules.class_models import *
@@ -29,6 +28,7 @@ EPOCHS = 250
 PATIENCE = 50
 ALPHA = 0.3
 LR = 1e-3
+TRAIN = True
 
 SEED = Config.SEED
 reset_seed(SEED)
@@ -145,69 +145,85 @@ for fold, (train_idx, val_idx) in enumerate(sgkf.split(X, y, groups)):
     X_tr, X_val = X[train_idx], X[val_idx]
     y_tr, y_val = y[train_idx], y[val_idx]
 
+    if TRAIN:
 
-    subjects_id = np.array(groups)[train_idx]
-    train_seq_ids = train_ids[train_idx]
+        subjects_id = np.array(groups)[train_idx]
+        train_seq_ids = train_ids[train_idx]
 
-    print(" ---- check for reproductibility ----")
-    print(f"first 10 seq_id = {train_seq_ids[:10]}")
-    print(f"first 10 train idx = {train_idx[:10]}, and val idx = {val_idx[:10]}")
-    print(f"mean train idx = {np.mean(train_idx)}, and mean val idx = {np.mean(val_idx)}\n")
+        print(" ---- check for reproductibility ----")
+        print(f"first 10 seq_id = {train_seq_ids[:10]}")
+        print(f"first 10 train idx = {train_idx[:10]}, and val idx = {val_idx[:10]}")
+        print(f"mean train idx = {np.mean(train_idx)}, and mean val idx = {np.mean(val_idx)}\n")
 
-    df = pd.DataFrame({'subject_id': subjects_id, 'seq_id': train_seq_ids})
-    seqs_by_subject = (
-            df.groupby('subject_id')['seq_id']
-            .unique()
-            .apply(list)
-            .to_dict()
-        )
+        df = pd.DataFrame({'subject_id': subjects_id, 'seq_id': train_seq_ids})
+        seqs_by_subject = (
+                df.groupby('subject_id')['seq_id']
+                .unique()
+                .apply(list)
+                .to_dict()
+            )
 
-    #### DATA AUGMENTATION #####
-    print("------ DATA AUGMENTATION: DEVICE ROTATION ------")
-    rotation_augmented = DeviceRotationAugment(X_tr, y_tr, train_seq_ids,     
-                          seqs_by_subject, selected_features, p_rotation=1.1, small_rotation=2)
-    X_tr, y_tr, count = rotation_augmented(axes=['z', 'x'])
-    print(f"number of additional rotated features samples: {count}")
-    print(f"shape of training data after augmentation (X, y): {X_tr.shape, y_tr.shape}\n")
+        #### DATA AUGMENTATION #####
+        print("------ DATA AUGMENTATION: DEVICE ROTATION ------")
+        rotation_augmented = DeviceRotationAugment(X_tr, y_tr, train_seq_ids,     
+                            seqs_by_subject, selected_features, p_rotation=1.1, small_rotation=2)
+        X_tr, y_tr, count = rotation_augmented(axes=['z', 'x'])
+        print(f"number of additional rotated features samples: {count}")
+        print(f"shape of training data after augmentation (X, y): {X_tr.shape, y_tr.shape}\n")
 
-    #augmenter = Augment()
+        #augmenter = Augment()
 
-    # augmenter = Augment(
-    #     p_jitter=0.98, sigma=0.033, scale_range=(0.75,1.16),
-    #     p_dropout=0.42,
-    #     p_moda=0.39, drift_std=0.004, drift_max=0.39    
-    # )
+        # augmenter = Augment(
+        #     p_jitter=0.98, sigma=0.033, scale_range=(0.75,1.16),
+        #     p_dropout=0.42,
+        #     p_moda=0.39, drift_std=0.004, drift_max=0.39    
+        # )
 
-    #########################################
+        #########################################
 
-    train_ds = SensorDataset(X_tr, y_tr, imu_dim = 7, alpha=ALPHA)  ### TRAINING ROTATION AUGMENTED DATA WITH MixUp \alpha 
+        train_ds = SensorDataset(X_tr, y_tr, imu_dim = 7, alpha=ALPHA)  ### TRAINING ROTATION AUGMENTED DATA WITH MixUp \alpha 
+
+
+        # CLASS IMBALANCE handling 
+        print(" ----------- CLASS INBALANCE SAMPLER (WeightedRandomSampler) ---------") 
+        class_counts = np.bincount(y_tr.numpy())
+        print(f"Number of samples per class: {Counter(y_tr.numpy())}\n")
+        class_weights_balanced = 1. / class_counts
+        sample_weights = class_weights_balanced[y_tr.numpy()]
+        sampler = WeightedRandomSampler(weights=sample_weights, num_samples=len(sample_weights) , replacement=True)
+        tracking_sampler = TrackingSampler(sampler)
+
+        sampled_indices = list(sampler)
+        sampled_labels = y_tr[sampled_indices]
+        print(Counter(sampled_labels.numpy()))
+
+        train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, sampler=tracking_sampler)
+    
     val_ds = SensorDataset(X_val, y_val, imu_dim = 7, training=False) ### VALIDATION DATA (NO AUG, NO MixUp)
-
-
-    # CLASS IMBALANCE handling 
-    print(" ----------- CLASS INBALANCE SAMPLER (WeightedRandomSampler) ---------") 
-    class_counts = np.bincount(y_tr.numpy())
-    print(f"Number of samples per class: {Counter(y_tr.numpy())}\n")
-    class_weights_balanced = 1. / class_counts
-    sample_weights = class_weights_balanced[y_tr.numpy()]
-    sampler = WeightedRandomSampler(weights=sample_weights, num_samples=len(sample_weights) , replacement=True)
-    tracking_sampler = TrackingSampler(sampler)
-
-    sampled_indices = list(sampler)
-    sampled_labels = y_tr[sampled_indices]
-    print(Counter(sampled_labels.numpy()))
-
-    train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, sampler=tracking_sampler)
     val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False)
 
-    criterion = soft_cross_entropy # LOSS FUNCTION
 
-    model = MiniGestureClassifier(imu_dim=X_tr.shape[2], hidden_dim=128, num_classes=len(class_weight)) # MODEL
-    optimizer = optim.Adam(model.parameters(), lr=LR) # OPTIMIZER
+    if TRAIN:
+        criterion = SoftCrossEntropy(bfrb_classes=bfrb_classes, gamma = 0.5) # LOSS FUNCTION
 
-    best_score = train_model(model, train_loader, val_loader, optimizer, criterion, EPOCHS, DEVICE, class_weight, bfrb_classes, patience=PATIENCE, fold = fold)
+        model = MiniGestureClassifier(imu_dim=X_tr.shape[2], hidden_dim=128, num_classes=len(class_weight)) # MODEL
+        optimizer = optim.Adam(model.parameters(), lr=LR) # OPTIMIZER
+
+        best_score = train_model(model, train_loader, val_loader, optimizer, criterion, EPOCHS, DEVICE, bfrb_classes, patience=PATIENCE, fold = fold)
+        best_scores.append(best_score)
+    else:
+        print("---- INFERENCE MODE ----")
+        processing_dir = Config.EXPORT_DIR
+        models_dir = Config.EXPORT_MODELS_PATH
+        predictor = EnsemblePredictor(processing_dir, models_dir, DEVICE)
+        inverse_map_classes = predictor.inverse_map_classes
+        #map_classes = predictor.map_classes
+        
+        preds_str = predictor.predict(X_val.to(DEVICE), by_fold = fold)
+        preds_int = [inverse_map_classes[pred_str] for pred_str in preds_str]
+        best_score, _, _ = competition_metric(y_val, preds_int)
+    
     best_scores.append(best_score)
-
 
 for fold, score in enumerate(best_scores):
     print(f" - Best score for fold {fold}: {score}")
