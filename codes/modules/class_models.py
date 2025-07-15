@@ -319,7 +319,7 @@ class MiniGestureLSTMClassifier(nn.Module):
     
 
 class EarlyStopping:
-    def __init__(self, patience=5, mode='max', restore_best_weights=True, verbose=False):
+    def __init__(self, patience=5, mode='max', restore_best_weights=True, verbose=False, logger = None):
         self.patience = patience
         self.mode = mode
         self.restore_best_weights = restore_best_weights
@@ -328,6 +328,7 @@ class EarlyStopping:
         self.counter = 0
         self.early_stop = False
         self.best_model_state = None
+        self.logger = logger
 
     def __call__(self, current_score, model):
         if self.mode == 'max':
@@ -341,15 +342,24 @@ class EarlyStopping:
             if self.restore_best_weights:
                 self.best_model_state = model.state_dict()
             if self.verbose:
-                print(f"EarlyStopping: Improvement found, saving model with score {current_score:.4f}")
+                if self.logger is not None:
+                    self.logger.info(f"EarlyStopping: Improvement found, saving model with score {current_score:.4f}")
+                else:
+                    print(f"EarlyStopping: Improvement found, saving model with score {current_score:.4f}")
         else:
             self.counter += 1
             if self.verbose:
-                print(f"EarlyStopping: No improvement for {self.counter} epoch(s)")
+                if self.logger is not None:
+                    self.logger.info(f"EarlyStopping: No improvement for {self.counter} epoch(s)")
+                else:
+                    print(f"EarlyStopping: No improvement for {self.counter} epoch(s)")
             if self.counter >= self.patience:
                 self.early_stop = True
                 if self.verbose:
-                    print("EarlyStopping: Stopping early.")
+                    if self.logger is not None:
+                        self.logger.info("EarlyStopping: Stopping early.")
+                    else:
+                        print("EarlyStopping: Stopping early.")
                 if self.restore_best_weights and self.best_model_state is not None:
                     model.load_state_dict(self.best_model_state)
 
@@ -529,10 +539,10 @@ class DeviceRotationAugment:
             x_rotated = []
             axes_choice = np.array(axes)
             for i in range(self.iter): #self.iter
-                #if (np.random.random() < self.p_rotation) and (len(axes_choice) > 0):
-                ax = axes_choice[i] #np.random.choice(axes_choice)
-                x_rotated.append(self.apply_rotation(xx, ax, seq_id, seqs_to_angle)) # subject_id, subject_to_angle)
-                    #axes_choice = np.delete(axes_choice, np.where(axes_choice == ax)) 
+                if (np.random.random() < self.p_rotation) and (len(axes_choice) > 0):
+                    ax = np.random.choice(axes_choice) #axes_choice[i] #
+                    x_rotated.append(self.apply_rotation(xx, ax, seq_id, seqs_to_angle)) # subject_id, subject_to_angle)
+                    axes_choice = np.delete(axes_choice, np.where(axes_choice == ax)) 
             if len(x_rotated) > 0:
                 self.count += len(x_rotated)
                 x_rotated = [torch.tensor(x) for x in x_rotated]

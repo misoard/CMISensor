@@ -40,7 +40,10 @@ class Config:
         TEST_PATH = "~/.kaggle/sensor-data/test.csv"
         TEST_DEMOGRAPHICS_PATH = "~/.kaggle/sensor-data/test_demographics.csv"
         EXPORT_DIR =  "/Users/mathieuisoard/Documents/kaggle-competitions/CMI-sensor-competition/github/data"                                  
-        EXPORT_MODELS_PATH =  "/Users/mathieuisoard/Documents/kaggle-competitions/CMI-sensor-competition/github/models"  
+        EXPORT_MODELS_PATH =  "/Users/mathieuisoard/Documents/kaggle-competitions/CMI-sensor-competition/github/models" 
+        OPTUNA_PATH_SAVED =   "/Users/mathieuisoard/Documents/kaggle-competitions/CMI-sensor-competition/github/optuna_data" 
+        OPTUNA_PATH_LOGS =   "/Users/mathieuisoard/Documents/kaggle-competitions/CMI-sensor-competition/github/codes/logs_optuna" 
+ 
     
     elif parts[0] == 'home':
         TRAIN_PATH = "/home/mathieuisoard/remote-github/sensor-data/train.csv"
@@ -49,13 +52,18 @@ class Config:
         TEST_DEMOGRAPHICS_PATH = "/home/mathieuisoard/remote-github/sensor-data/test_demographics.csv"
         EXPORT_DIR =  "/home/mathieuisoard/remote-github/data"                                  
         EXPORT_MODELS_PATH =  "/home/mathieuisoard/remote-github/models_from_gcloud" 
+        OPTUNA_PATH_SAVED =   "/home/mathieuisoard/remote-github/optuna_data" 
+        OPTUNA_PATH_LOGS =   "/home/mathieuisoard/remote-github/codes/logs_optuna" 
+
     else:
         print("NEW ROOT DIRECTORY") 
 
 
     os.makedirs(EXPORT_DIR, exist_ok=True)                                 
     os.makedirs(EXPORT_MODELS_PATH, exist_ok=True)                                 
-    
+    os.makedirs(OPTUNA_PATH_SAVED, exist_ok=True)                                 
+    os.makedirs(OPTUNA_PATH_LOGS, exist_ok=True) 
+
     # Training parameters
     SEED = 42
     N_FOLDS = 5
@@ -72,16 +80,16 @@ def check_gpu_availability():
 
     import torch
     if torch.backends.mps.is_available():
-        print("MPS (Apple GPU) is available.")
+        #print("MPS (Apple GPU) is available.")
         return 'mps'
     else:
-        print("MPS not available. Using CPU.")
+        #print("MPS not available. Using CPU.")
         return 'cpu'
 
 # Check GPU availability
 DEVICE = torch.device(check_gpu_availability())
 
-print(f"✓ Configuration loaded for Kaggle environment (Device: {DEVICE})")
+#print(f"✓ Configuration loaded for Kaggle environment (Device: {DEVICE})")
 
 
 def clean_data(data_sequences, cols, prefix = 'both'):

@@ -5,9 +5,9 @@ from sklearn.metrics import recall_score
 import os
 
 
-def train_model(model, train_loader, val_loader, optimizer, criterion, epochs, device, bfrb_classes, patience = 50, fold = None):
+def train_model(model, train_loader, val_loader, optimizer, criterion, epochs, device, bfrb_classes, patience = 50, fold = None, logger = None):
     model.to(device)
-    early_stopper = EarlyStopping(patience=patience, mode='max', restore_best_weights=True, verbose=True)
+    early_stopper = EarlyStopping(patience=patience, mode='max', restore_best_weights=True, verbose=True, logger = logger)
 
     best_score = 0
     for epoch in range(1, epochs + 1):
@@ -75,11 +75,16 @@ def train_model(model, train_loader, val_loader, optimizer, criterion, epochs, d
             torch.save(early_stopper.best_model_state, os.path.join(Config.EXPORT_MODELS_PATH, name ))
 
         if early_stopper.early_stop:
-            print("Training stopped early.")
+            if logger is not None:
+                logger.info("Training stopped early.")
+            else:
+                print("Training stopped early.")
             break
         
-
-        print(f"Epoch {epoch}/{epochs} - Train Loss: {train_loss:.4f}, Acc: {train_acc:.4f}, Bin. : {train_binary_recall:.4f}, Macro: {train_macro_f1:.4f} | Val Loss: {val_loss:.4f}, Acc: {val_acc:.4f}, Bin. : {val_binary_recall:.4f}, Macro: {val_macro_f1:.4f}")
+        if logger is not None:
+            logger.info(f"Epoch {epoch}/{epochs} - Train Loss: {train_loss:.4f}, Acc: {train_acc:.4f}, Bin. : {train_binary_recall:.4f}, Macro: {train_macro_f1:.4f} | Val Loss: {val_loss:.4f}, Acc: {val_acc:.4f}, Bin. : {val_binary_recall:.4f}, Macro: {val_macro_f1:.4f}")
+        else:
+            print(f"Epoch {epoch}/{epochs} - Train Loss: {train_loss:.4f}, Acc: {train_acc:.4f}, Bin. : {train_binary_recall:.4f}, Macro: {train_macro_f1:.4f} | Val Loss: {val_loss:.4f}, Acc: {val_acc:.4f}, Bin. : {val_binary_recall:.4f}, Macro: {val_macro_f1:.4f}")
 
 
 
@@ -88,8 +93,9 @@ def train_model(model, train_loader, val_loader, optimizer, criterion, epochs, d
 
 class SoftCrossEntropy:
     def __init__(self,
-                 bfrb_classes = None, gamma = None, class_weights = None, device = DEVICE):      
+                 bfrb_classes = None, gamma = None, lamb = None, class_weights = None, device = DEVICE):      
         self.gamma = gamma
+        self.lamb = lamb
         self.class_weights = class_weights
         self.bfrb_classes = bfrb_classes
         self.device = device
@@ -109,20 +115,38 @@ class SoftCrossEntropy:
 
         weighted_kl = F.kl_div(preds_log, soft_targets, reduction='batchmean')
 
-        if self.bfrb_classes is not None:
+        if self.bfrb_classes is None and (self.gamma is not None or self.lamb is not None):
+            raise ValueError("bfrb_classes should not be None when lamb or gamma is specified")
+
+        if self.bfrb_classes is not None and (self.gamma is not None or self.lamb is not None):
             mask_bfrb_classes = np.array([idx in self.bfrb_classes.numpy() for idx in range(preds.shape[1])])
+            
 
             bfrb_pred = torch.cat( [outputs[:, mask_bfrb_classes], outputs[:, ~mask_bfrb_classes].sum(dim=1, keepdim=True)], dim=1)
             bfrb_target = torch.cat( [soft_targets[:, mask_bfrb_classes], soft_targets[:, ~mask_bfrb_classes].sum(dim=1, keepdim=True)], dim=1)
+
+            bin_pred = torch.stack([ outputs[:, mask_bfrb_classes].sum(1), outputs[:, ~mask_bfrb_classes].sum(1)], dim=1)
+            bin_target = torch.stack([soft_targets[:, mask_bfrb_classes].sum(1), soft_targets[:, ~mask_bfrb_classes].sum(1)], dim=1) 
 
             brfb_loss = F.kl_div(
             torch.log(bfrb_pred + 1e-8),  # log-probabilities
             bfrb_target,
             reduction='batchmean'
             )
-            if self.gamma is None:
-                raise ValueError("gamma is None")
-            return  self.gamma * weighted_kl + (1. - self.gamma) * brfb_loss #gamma * weighted_kl + (1. - gamma) * brfb_loss#.sum(dim = 1).mean() #
+
+            binary_loss = F.kl_div(
+            torch.log(bin_pred + 1e-8),  # log-probabilities #torch.log(+1e-8)
+            bin_target,
+            reduction='batchmean'
+            )
+
+
+            if self.gamma is not None and self.lamb is None:
+                return  self.gamma * weighted_kl + (1. - self.gamma) * brfb_loss 
+            if self.gamma is None and self.lamb is not None:
+                return  self.lamb * weighted_kl + (1. - self.lamb) * binary_loss 
+            if self.gamma is not None and self.lamb is not None:
+                return   weighted_kl + self.gamma * brfb_loss + self.lamb * binary_loss    
         else:
             return weighted_kl
 

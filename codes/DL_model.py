@@ -17,7 +17,7 @@ import sys
 
 print("")
 print("======== COMMENTS ========")
-print(" normal loss and BRFB loss only, gamma = 0.7")
+print(" normal loss => gamma = 1.")
 print("+ balanced class weights for random sampling but not for loss function")
 print("-------------------------")
 print("")
@@ -204,7 +204,7 @@ for fold, (train_idx, val_idx) in enumerate(sgkf.split(X, y, groups)):
 
 
     if TRAIN:
-        criterion = SoftCrossEntropy(bfrb_classes=bfrb_classes, gamma = 0.5) # LOSS FUNCTION
+        criterion = SoftCrossEntropy(bfrb_classes=bfrb_classes, gamma = .5, lamb = .5) # LOSS FUNCTION
 
         model = MiniGestureClassifier(imu_dim=X_tr.shape[2], hidden_dim=128, num_classes=len(class_weight)) # MODEL
         optimizer = optim.Adam(model.parameters(), lr=LR) # OPTIMIZER
