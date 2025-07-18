@@ -83,23 +83,32 @@ class LSTMWithAttention(nn.Module):
 class AttentionPooling(nn.Module):
     def __init__(self, hidden_dim, bias_strength = 5.):
         super().__init__()
+        # self.attn = nn.Sequential(
+        #     nn.Conv1d(hidden_dim, hidden_dim, kernel_size=1),
+        #     nn.Tanh(),
+        #     nn.Conv1d(hidden_dim, 1, kernel_size=1)
+        # )
+        # self.attn = nn.Sequential(
+        #     nn.Conv1d(hidden_dim, 1, kernel_size=1),  # [B, 1, T]
+        #     nn.Softmax(dim=-1)
+        # )
         self.attn = nn.Sequential(
-            nn.Conv1d(hidden_dim, hidden_dim, kernel_size=1),
-            nn.Tanh(),
-            nn.Conv1d(hidden_dim, 1, kernel_size=1)
+            nn.Linear(hidden_dim, 1),  # [B, 1, T]
+            nn.Tanh()
         )
         self.bias_strength = bias_strength
         self.weights = None
 
     def forward(self, x, phase_adj = None):
         # x: [B, hidden_dim, T]
-        scores = self.attn(x).squeeze(1)  # [B, T]
+        scores = self.attn(x.permute(0, 2, 1)).squeeze(-1)  # [B, T]
 
         if phase_adj is not None:
             #bias = (phase_adj.float() * self.bias_strength)  # [B, T]
             scores = scores #+ bias
 
         weights = F.softmax(scores, dim=1)  # [B, T]
+        #weights = scores
         self.weights = weights
         pooled = torch.sum(x * weights.unsqueeze(1), dim=2)  # [B, hidden_dim]
         return pooled
@@ -109,13 +118,16 @@ class IMUEncoder(nn.Module):
         super().__init__()
         self.net = nn.Sequential(
             nn.Conv1d(input_dim, hidden_dim, kernel_size=3, padding=1),
-            nn.ReLU(), #inplace=True
+            #nn.BatchNorm1d(hidden_dim),
+            nn.ReLU(inplace=True), #inplace=True
             nn.BatchNorm1d(hidden_dim),
             nn.Dropout(p=0.3), 
             #nn.MaxPool1d(kernel_size=2, stride=2),  # halves time length
             nn.Conv1d(hidden_dim, hidden_dim, kernel_size=3, padding=1),
-            nn.ReLU(),
+            #nn.BatchNorm1d(hidden_dim),
+            nn.ReLU(inplace=True),
             nn.BatchNorm1d(hidden_dim),
+            #nn.Dropout(p=0.2), 
             #nn.MaxPool1d(kernel_size=2, stride=2),   # halves again → total /4
         )
 
@@ -130,14 +142,17 @@ class OptionalEncoder(nn.Module):
         super().__init__()
         self.net = nn.Sequential(
             nn.Conv1d(input_dim, hidden_dim, kernel_size=3, padding=1),
-            nn.ReLU(),
             nn.BatchNorm1d(hidden_dim),
+            nn.ReLU(inplace=True),
+            #nn.BatchNorm1d(hidden_dim),
             nn.Dropout(p=0.3),
-            nn.MaxPool1d(kernel_size=2, stride=2),
+            #nn.MaxPool1d(kernel_size=2, stride=2),
             nn.Conv1d(hidden_dim, hidden_dim, kernel_size=3, padding=1),
-            nn.ReLU(),
             nn.BatchNorm1d(hidden_dim),
-            nn.MaxPool1d(kernel_size=2, stride=2)
+            nn.ReLU(inplace=True),
+            #nn.BatchNorm1d(hidden_dim),
+            #nn.Dropout(p=0.2),
+            #nn.MaxPool1d(kernel_size=2, stride=2)
         )
 
     def forward(self, x, mask):
@@ -148,13 +163,13 @@ class OptionalEncoder(nn.Module):
         # Adjust mask accordingly by downsampling (average pooling)
         # mask: [B, T]
         mask = mask.unsqueeze(1).float()  # [B, 1, T]
-        mask = F.avg_pool1d(mask, kernel_size=2, stride=2)  # [B, 1, T/2]
-        mask = F.avg_pool1d(mask, kernel_size=2, stride=2)  # [B, 1, T/4]
+        #mask = F.avg_pool1d(mask, kernel_size=2, stride=2)  # [B, 1, T/2]
+        #mask = F.avg_pool1d(mask, kernel_size=2, stride=2)  # [B, 1, T/4]
         mask = mask.squeeze(1)  # [B, T/4]
 
         out = out * mask.unsqueeze(1)  # [B, hidden_dim, T/4]
 
-        # Normalize by sum of mask per timestep (avoid div zero)
+        #Normalize by sum of mask per timestep (avoid div zero)
         norm = mask.sum(dim=1, keepdim=True).clamp(min=1e-6)  # [B, 1]
         out = out / norm.unsqueeze(1)  # broadcast on hidden_dim
 
@@ -174,6 +189,62 @@ class TabularEncoder(nn.Module):
         # Expand along time dimension to [B, hidden_dim, seq_len]
         emb = emb.unsqueeze(2).expand(-1, -1, seq_len)
         return emb
+    
+
+class TOFEncoder3DWithSpatialAttention(nn.Module):
+    def __init__(self, in_channels=5, out_channels=64, hidden_dim=128, H=8, W=8):
+        super().__init__()
+
+        # 3D CNN to process [B, 5, T, 8, 8]
+        self.conv3d = nn.Sequential(
+            nn.Conv3d(in_channels, out_channels, kernel_size=(3, 3, 3), padding=(1, 1, 1)),
+            nn.BatchNorm3d(out_channels),
+            nn.ReLU(inplace=True),
+
+            nn.Conv3d(out_channels, hidden_dim, kernel_size=(3, 3, 3), padding=(1, 1, 1)),
+            nn.BatchNorm3d(hidden_dim),
+            nn.ReLU(inplace=True),
+        )
+
+        # Spatial attention: per pixel over each 8x8 grid at each time step
+        self.spatial_attn = nn.Sequential(
+            nn.Conv2d(hidden_dim, hidden_dim // 2, kernel_size=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(hidden_dim // 2, 1, kernel_size=1),  # attention logits per pixel
+        )
+
+        self.H = H
+        self.W = W
+
+    def forward(self, x):
+        """
+        x: [B, 5, T, 8, 8]
+        returns: [B, hidden_dim, T] (aggregated per timestep)
+        """
+        B, C, T, H, W = x.shape
+
+        # Apply 3D conv
+        feat = self.conv3d(x)  # [B, hidden_dim, T, H, W]
+
+        # Reshape for spatial attention per time step
+        feat_reshaped = feat.permute(0, 2, 1, 3, 4).contiguous()  # [B, T, C, H, W]
+        feat_flat = feat_reshaped.view(B * T, -1, H, W)  # [B*T, C, H, W]
+
+        # Spatial attention scores
+        attn_logits = self.spatial_attn(feat_flat)  # [B*T, 1, H, W]
+        attn_scores = F.softmax(attn_logits.view(B * T, -1), dim=-1).view(B * T, 1, H, W)  # [B*T, 1, H, W]
+
+        # Apply attention
+        weighted_feat = feat_flat * attn_scores  # [B*T, C, H, W]
+        aggregated = weighted_feat.view(B, T, -1, H * W).sum(dim=-1)  # [B, T, C]
+
+        # Transpose to [B, C, T] to match other branches
+        aggregated = aggregated.permute(0, 2, 1)
+
+        return aggregated  # [B, hidden_dim, T]
+
+
+
 
 class GatedFusion(nn.Module):
     def __init__(self, hidden_dim, num_modalities):
@@ -194,6 +265,40 @@ class GatedFusion(nn.Module):
         fused = sum(gated_feats)  # [B, T, hidden_dim]
         return fused.permute(0, 2, 1)  # [B, hidden_dim, T]
 
+class AttentionFusion(nn.Module):
+    def __init__(self, hidden_dim, num_modalities=2):
+        super().__init__()
+        self.query = nn.Linear(hidden_dim, hidden_dim)
+        self.keys = nn.ModuleList([nn.Linear(hidden_dim, hidden_dim) for _ in range(num_modalities)])
+        self.values = nn.ModuleList([nn.Linear(hidden_dim, hidden_dim) for _ in range(num_modalities)])
+        self.scale = hidden_dim ** 0.5
+
+    def forward(self, inputs):
+        """
+        inputs: list of [B, hidden_dim, T] tensors
+        output: [B, hidden_dim, T] fused tensor
+        """
+        # Compute shared query
+        #stacked_inputs = torch.stack(inputs, dim=1)  # [B, M, hidden_dim, T]
+        #B, M, C, T = stacked_inputs.shape
+
+        query = self.query(inputs[0].permute(0, 2, 1))  # [B, T, hidden_dim]
+        keys = [key(x.permute(0, 2, 1)) for key, x in zip(self.keys, inputs)]   # each: [B, T, hidden_dim]
+        values = [val(x.permute(0, 2, 1)) for val, x in zip(self.values, inputs)]  # each: [B, T, hidden_dim]
+
+        key_tensor = torch.stack(keys, dim=1)     # [B, M, T, hidden_dim]
+        value_tensor = torch.stack(values, dim=1) # [B, M, T, hidden_dim]
+
+        # Attention: dot product over modalities
+        attn_scores = torch.einsum('btc,bmtc->btm', query, key_tensor) / self.scale  # [B, T, M]
+        attn_weights = F.softmax(attn_scores, dim=-1)  # [B, T, M]
+
+        # Weighted sum over modalities
+        fused = torch.einsum('btm,bmtc->btc', attn_weights, value_tensor)  # [B, T, hidden_dim]
+        return fused.permute(0, 2, 1)  # back to [B, hidden_dim, T]
+
+
+
 class GestureClassifier(nn.Module):
     def __init__(self, imu_dim, hidden_dim, num_classes, tof_dim = None, thm_dim = None): # tabular_dim = None
         super().__init__()
@@ -202,28 +307,30 @@ class GestureClassifier(nn.Module):
             tof_dim = imu_dim
         if thm_dim is None:
             thm_dim = imu_dim
-        # if tabular_dim is None:
-        #     tabular_dim = imu_dim
 
         self.imu_encoder = IMUEncoder(imu_dim, hidden_dim)
         self.tof_encoder = OptionalEncoder(tof_dim, hidden_dim)
         self.thm_encoder = OptionalEncoder(thm_dim, hidden_dim)
-        #self.tabular_encoder = TabularEncoder(tabular_dim, hidden_dim)
         self.fusion = GatedFusion(hidden_dim, num_modalities=3)
+
 
         self.classifier_rnn = nn.GRU(hidden_dim, hidden_dim, batch_first=True, bidirectional=True)
         self.classifier_head = nn.Sequential(
-            nn.Linear(hidden_dim * 2, hidden_dim),
+            nn.Linear(hidden_dim * 2 , hidden_dim),
             nn.ReLU(),
             nn.Dropout(p = 0.3),
             nn.Linear(hidden_dim, num_classes),
             #nn.Softmax()
         )
 
-    def forward(self, imu, tof=None, thm=None): #, tabular_feats=None
+    def forward(self, imu, thm=None, tof=None): #, tabular_feats=None
         B, T, _ = imu.shape
 
         imu_feat = self.imu_encoder(imu)  # [B, hidden_dim, T/4]
+
+        # nan_mask = torch.isnan(thm)
+        # nan_indices = torch.nonzero(nan_mask, as_tuple=True)[0].detach().cpu()
+        # print(f"number of NaN (detect possible FE errors): {len(np.unique(nan_indices.numpy()))}")
 
         if tof is None:
             tof = torch.zeros_like(imu)
@@ -240,24 +347,102 @@ class GestureClassifier(nn.Module):
         tof_feat = self.tof_encoder(tof, tof_mask)  # [B, hidden_dim, T/4]
         thm_feat = self.thm_encoder(thm, thm_mask)  # [B, hidden_dim, T/4]
 
-        # if tabular_feats is None:
-        #     tabular_feats = torch.zeros(B, self.tabular_encoder.net[0].in_features, device=imu.device)
-
-        # tab_feat = self.tabular_encoder(tabular_feats, imu_feat.shape[2])  # expand to [B, hidden_dim, T/4]
-
         fused =  self.fusion([imu_feat, tof_feat, thm_feat])  # [B, hidden_dim, T/4]
 
         fused_t = fused.permute(0, 2, 1)  # [B, T/4, hidden_dim]
-
         rnn_out, _ = self.classifier_rnn(fused_t)  # [B, T/4, hidden_dim*2]
 
         pooled = rnn_out.mean(dim=1)#   # [B, hidden_dim*2]
-        pooled = F.dropout(pooled, p=0.5, training=self.training) 
+        #pooled = F.dropout(pooled, p=0.5, training=self.training) 
 
         out = self.classifier_head(pooled)  # [B, num_classes]
 
         return out
     
+
+class GlobalGestureClassifier(nn.Module):
+    def __init__(self, imu_dim, hidden_dim, num_classes, thm_tof_dim = None, p_drop_tof = 0.): # tabular_dim = None
+        super().__init__()
+
+        if thm_tof_dim is None:
+            thm_tof_dim = imu_dim
+        
+        self.thm_tof_dim = thm_tof_dim
+
+        self.imu_encoder = IMUEncoder(imu_dim, hidden_dim)
+        self.attn_pool = AttentionPooling(hidden_dim)
+
+        self.thm_tof_encoder = OptionalEncoder(thm_tof_dim, hidden_dim)
+
+        self.gated_fusion = GatedFusion(hidden_dim, num_modalities=2)
+        self.attention_fusion = AttentionFusion(hidden_dim, num_modalities=2)
+        self.final_fusion = nn.Sequential(
+            nn.Linear(2 * hidden_dim, hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.3)
+        )
+        #self.bilstm = nn.LSTM(hidden_dim * 2, hidden_dim, bidirectional=True, batch_first=True)
+        #self.classifier_rnn = nn.GRU(hidden_dim, hidden_dim, batch_first=True, bidirectional=True)
+        self.alpha = nn.Parameter(torch.tensor(0.0))  # sigmoid(0) = 0.5
+        self.p_drop_tof = p_drop_tof
+
+        self.classifier_head = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Dropout(p = 0.3),
+            nn.Linear(hidden_dim, num_classes),
+            #nn.Softmax()
+        )
+
+        self.imu_head = nn.Sequential(
+            nn.AdaptiveAvgPool1d(1),
+            nn.Flatten(),
+            nn.Dropout(p = 0.3),
+            nn.Linear(hidden_dim, num_classes)
+        )
+
+    def forward(self, imu, thm_tof=None): #, tabular_feats=None
+        B, T, _ = imu.shape
+
+        imu_feat = self.imu_encoder(imu)  # [B, hidden_dim, T]
+        pooled_imu = imu_feat.mean(dim= 2)
+        logits_imu = self.imu_head(imu_feat)
+
+        if thm_tof is None:
+            thm_tof = torch.zeros_like(imu)
+            tof_mask = torch.zeros(B, T, device=imu.device)
+        else:
+            tof_mask = (~torch.isnan(thm_tof).any(dim=2)).float()
+
+        # #tof_mask_drop = torch.ones_like(tof_mask)
+        # if self.training and torch.rand(1).item() < self.p_drop_tof:
+        #     thm_tof = torch.zeros_like(thm_tof)
+        #     #tof_mask_drop = torch.zeros(B, T, device=imu.device)
+    
+
+        thm_tof_feat = self.thm_tof_encoder(thm_tof, tof_mask)  # [B, hidden_dim, T]
+        attn =  self.attention_fusion([imu_feat, thm_tof_feat])  # [B, hidden_dim, T]
+        gated =  self.gated_fusion([imu_feat, thm_tof_feat])  # [B, hidden_dim, T]
+        
+
+        alpha = torch.sigmoid(self.alpha).view(1, -1, 1)  # shape [1, C, 1]
+        # if thm_tof is None or tof_mask_drop.sum() == 0:
+        #     print("houla")
+        #     alpha = torch.ones_like(alpha)  # full weight to gated (IMU)
+        
+        fused = alpha * gated + (1 - alpha) * attn  # broadcast over B, T
+        pooled_fused= self.attn_pool(fused) #fused.mean(dim= 2) #
+        #mean_pooled = gated.mean(dim=2)
+        #max_pooled = gated.max(dim=2).values
+
+        #pooled_imu = F.dropout(pooled_imu, p=0.2, training=self.training)
+        #pooled_fused = F.dropout(pooled_fused, p=0.2, training=self.training)
+
+        pooled = self.final_fusion(torch.cat([pooled_imu, pooled_fused], dim=1))
+        #pooled = torch.cat([pooled_imu, pooled_fused], dim=1)
+        out = self.classifier_head(pooled)  # [B, num_classes]
+
+        return out, logits_imu   
 
 class MiniGestureClassifier(nn.Module):
     def __init__(self, imu_dim, hidden_dim, num_classes):
@@ -539,10 +724,10 @@ class DeviceRotationAugment:
             x_rotated = []
             axes_choice = np.array(axes)
             for i in range(self.iter): #self.iter
-                if (np.random.random() < self.p_rotation) and (len(axes_choice) > 0):
-                    ax = np.random.choice(axes_choice) #axes_choice[i] #
-                    x_rotated.append(self.apply_rotation(xx, ax, seq_id, seqs_to_angle)) # subject_id, subject_to_angle)
-                    axes_choice = np.delete(axes_choice, np.where(axes_choice == ax)) 
+                #if (np.random.random() < self.p_rotation) and (len(axes_choice) > 0):
+                ax = axes_choice[i] #np.random.choice(axes_choice) # #
+                x_rotated.append(self.apply_rotation(xx, ax, seq_id, seqs_to_angle)) # subject_id, subject_to_angle)
+                    #axes_choice = np.delete(axes_choice, np.where(axes_choice == ax)) 
             if len(x_rotated) > 0:
                 self.count += len(x_rotated)
                 x_rotated = [torch.tensor(x) for x in x_rotated]

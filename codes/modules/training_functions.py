@@ -5,11 +5,15 @@ from sklearn.metrics import recall_score
 import os
 
 
-def train_model(model, train_loader, val_loader, optimizer, criterion, epochs, device, bfrb_classes, patience = 50, fold = None, logger = None):
+def train_model(model, train_loader, val_loader, optimizer, criterion, epochs, batch_size, device, bfrb_classes, patience = 50, fold = None, logger = None, split_indices = None, scheduler = None, hide_val_half = True):
+    reset_seed(42)
     model.to(device)
     early_stopper = EarlyStopping(patience=patience, mode='max', restore_best_weights=True, verbose=True, logger = logger)
-
+    if split_indices is not None:
+        idx_thm_tof = list(split_indices['thm']) + list(split_indices['tof'])
+    
     best_score = 0
+    i_scheduler = 0
     for epoch in range(1, epochs + 1):
         model.train()
         train_loss = 0
@@ -17,15 +21,31 @@ def train_model(model, train_loader, val_loader, optimizer, criterion, epochs, d
         train_targets = []
 
         for inputs, targets in train_loader:
+
+            # if hide_val_half and split_indices is not None:
+            #     half = batch_size // 2
+            #     x_front = inputs[:half]               
+            #     x_back  = inputs[half:].clone()   
+            #     x_back[:, :, idx_thm_tof] = 0.0    
+            #     inputs = torch.cat([x_front, x_back], dim=0)
             # print(targets[:5])
             # print(inputs[0, :10, 0])
             inputs, targets = inputs.to(device), targets.to(device)
             optimizer.zero_grad()
-            outputs = model(inputs) #, phase_adj = inputs[:, :,  -1]
-            #targets = targets * (1 - 0.2) + (0.2 / len(class_weight))
+            if split_indices is not None:
+                outputs, imu_logits = model(inputs[:, :, split_indices['imu']], inputs[:, :, idx_thm_tof]) #, phase_adj = inputs[:, :,  -1]
+            else:
+                outputs = model(inputs) #, phase_adj = inputs[:, :,  -1]
+            #targets = targets * (1 - 0.1) + (0.1 / 18)
+            imu_loss = criterion(imu_logits, targets)
             loss = criterion(outputs, targets) #, class_weight, bfrb_classes)
+            loss += 0.2 * imu_loss
             loss.backward()
             optimizer.step()
+            
+            if scheduler is not None:
+                scheduler.step(i_scheduler)
+                i_scheduler +=1
 
             train_loss += loss.item()
             train_preds.extend(outputs.argmax(1).cpu().numpy())
@@ -37,34 +57,61 @@ def train_model(model, train_loader, val_loader, optimizer, criterion, epochs, d
         # ---- Validation ----
         model.eval()
         val_loss = 0
-        val_preds = []
-        val_targets = []
-        bin_preds = []
-        bin_targets = []
+        val_preds = {'out': [], 'imu_only': [], 'all': []}
+        val_targets = {'out': [], 'imu_only': [], 'all': []}
+        # bin_preds = []
+        # bin_targets = []
 
         with torch.no_grad():
             for inputs, targets in val_loader:
+
+                if hide_val_half and split_indices is not None:
+                    half = batch_size // 2
+                    x_front = inputs[:half]               
+                    x_back  = inputs[half:].clone()   
+                    x_back[:, :, idx_thm_tof] = 0.0    
+                    inputs = torch.cat([x_front, x_back], dim=0)
+                    x_back, x_front = x_back.to(device), x_front.to(device)
+
+
                 inputs, targets = inputs.to(device), targets.to(device)
-                outputs = model(inputs) #, phase_adj = inputs[:, :,  -1]
-                loss = criterion(outputs, targets) #, class_weight, bfrb_classes)
-
-                val_loss += loss.item()
-                val_preds.extend(outputs.argmax(1).cpu().numpy())
-                val_targets.extend(targets.argmax(1).cpu().numpy())
-
-                mask_bfrb_classes = np.array([idx in bfrb_classes.numpy() for idx in range(outputs.shape[1])])
-                outputs = torch.nn.functional.softmax(outputs, dim=1)
-        
-                bin_pred = outputs[:, mask_bfrb_classes].sum(1) > 0.4 #torch.stack([, outputs[:, ~mask_bfrb_classes].sum(1)], dim=1) 
-                bin_preds.extend(bin_pred.cpu().numpy())
-
-                bin_target = targets[:, mask_bfrb_classes].sum(1) #, targets[:, ~mask_bfrb_classes].sum(1)], dim=1) 
-                bin_targets.extend(bin_target.cpu().numpy())
+                if split_indices is not None:
+                    outputs, imu_logits = model(inputs[:, :, split_indices['imu']], inputs[:, :, idx_thm_tof]) 
+                    assert x_back[:, :, split_indices['imu']].shape[2] > 0, "IMU split is empty!"
+                    outputs_imu_only, _ = model(x_back[:, :, split_indices['imu']], x_back[:, :, idx_thm_tof]) 
+                    outputs_all, _ = model(x_front[:, :, split_indices['imu']], x_front[:, :, idx_thm_tof]) 
+                else:
+                    outputs = model(inputs) #, phase_adj = inputs[:, :,  -1]               
                 
+                loss = criterion(outputs, targets) #, class_weight, bfrb_classes)
+                imu_loss = criterion(imu_logits, targets) #, class_weight, bfrb_classes)
+                loss += 0.2 * imu_loss
+                val_loss += loss.item()
+
+                if split_indices is not None:
+                    val_preds['all'].extend(outputs_all.argmax(1).cpu().numpy())
+                    val_preds['imu_only'].extend(outputs_imu_only.argmax(1).cpu().numpy())
+
+                    val_targets['all'].extend(targets[:half].argmax(1).cpu().numpy())
+                    val_targets['imu_only'].extend(targets[half:].argmax(1).cpu().numpy())
+
+                val_preds['out'].extend(outputs.argmax(1).cpu().numpy())
+                val_targets['out'].extend(targets.argmax(1).cpu().numpy())
+
+
+                # mask_bfrb_classes = np.array([idx in bfrb_classes.numpy() for idx in range(outputs.shape[1])])
+                # outputs = torch.nn.functional.softmax(outputs, dim=1)
         
-        val_acc, val_binary_recall, val_macro_f1 = competition_metric(val_targets, val_preds)     #accuracy_score(val_targets, val_preds)
-        val_binary_recall = recall_score(bin_targets, bin_preds)
+                # bin_pred = outputs[:, mask_bfrb_classes].sum(1) > 0.4 #torch.stack([, outputs[:, ~mask_bfrb_classes].sum(1)], dim=1) 
+                # bin_preds.extend(bin_pred.cpu().numpy())
+
+                # bin_target = targets[:, mask_bfrb_classes].sum(1) #, targets[:, ~mask_bfrb_classes].sum(1)], dim=1) 
+                # bin_targets.extend(bin_target.cpu().numpy())
+                
+        val_acc, _, val_macro_f1 = competition_metric(val_targets['out'], val_preds['out'])     #accuracy_score(val_targets, val_preds)
         early_stopper(val_acc, model)
+
+        #val_binary_recall = recall_score(bin_targets, bin_preds)
         if early_stopper.best_score > best_score:
             best_score = early_stopper.best_score
             name = "best_model"
@@ -81,12 +128,18 @@ def train_model(model, train_loader, val_loader, optimizer, criterion, epochs, d
                 print("Training stopped early.")
             break
         
-        if logger is not None:
-            logger.info(f"Epoch {epoch}/{epochs} - Train Loss: {train_loss:.4f}, Acc: {train_acc:.4f}, Bin. : {train_binary_recall:.4f}, Macro: {train_macro_f1:.4f} | Val Loss: {val_loss:.4f}, Acc: {val_acc:.4f}, Bin. : {val_binary_recall:.4f}, Macro: {val_macro_f1:.4f}")
+        if split_indices is not None:
+            val_acc_all, _, _ = competition_metric(val_targets['all'], val_preds['all'])    
+            val_acc_imu_only, _, _ = competition_metric(val_targets['imu_only'], val_preds['imu_only'])   
+            if logger is not None:
+                logger.info(f"Epoch {epoch}/{epochs} - Train Loss: {train_loss:.4f}, Acc: {train_acc:.4f}, Macro: {train_macro_f1:.4f} | Val Loss: {val_loss:.4f}, Acc: {val_acc:.4f},  Acc (imu only): {val_acc_imu_only:.4f},  Acc (imu+thm+tof): {val_acc_all:.4f}, Macro: {val_macro_f1:.4f}")
+            else:
+                print(f"Epoch {epoch}/{epochs} - Train Loss: {train_loss:.4f}, Acc: {train_acc:.4f}, Macro: {train_macro_f1:.4f} | Val Loss: {val_loss:.4f}, Acc: {val_acc:.4f},  Acc (imu only): {val_acc_imu_only:.4f},   Acc (imu+thm+tof): {val_acc_all:.4f},  Macro: {val_macro_f1:.4f}")
         else:
-            print(f"Epoch {epoch}/{epochs} - Train Loss: {train_loss:.4f}, Acc: {train_acc:.4f}, Bin. : {train_binary_recall:.4f}, Macro: {train_macro_f1:.4f} | Val Loss: {val_loss:.4f}, Acc: {val_acc:.4f}, Bin. : {val_binary_recall:.4f}, Macro: {val_macro_f1:.4f}")
-
-
+            if logger is not None:
+                logger.info(f"Epoch {epoch}/{epochs} - Train Loss: {train_loss:.4f}, Acc: {train_acc:.4f}, Macro: {train_macro_f1:.4f} | Val Loss: {val_loss:.4f}, Acc: {val_acc:.4f}, Macro: {val_macro_f1:.4f}")
+            else:
+                print(f"Epoch {epoch}/{epochs} - Train Loss: {train_loss:.4f}, Acc: {train_acc:.4f}, Macro: {train_macro_f1:.4f} | Val Loss: {val_loss:.4f}, Acc: {val_acc:.4f}, Macro: {val_macro_f1:.4f}")
 
     return best_score
 

@@ -224,6 +224,7 @@ def objective(trial):
         if TRAIN:
             criterion = SoftCrossEntropy() # LOSS FUNCTION #bfrb_classes=bfrb_classes, gamma = .5, lamb = .5
 
+            reset_seed(SEED)
             model = MiniGestureClassifier(imu_dim=X_tr.shape[2], hidden_dim=128, num_classes=len(class_weight)) # MODEL
             optimizer = optim.Adam(model.parameters(), lr=LR) # OPTIMIZER
 
@@ -244,7 +245,7 @@ def objective(trial):
         best_scores.append(best_score)
 
     logger.info(f"Finished trial {trial_id}")
-    return best_score
+    return np.mean(best_scores)
 
 study_name = "device_rotation_hyperparameters"
 study = optuna.create_study(direction="maximize",study_name=study_name,)

@@ -14,6 +14,7 @@ from modules.competition_metric import CompetitionMetric
 
 import sys
 
+from timm.scheduler import CosineLRScheduler
 
 print("")
 print("======== COMMENTS ========")
@@ -26,8 +27,12 @@ N_SPLITS = 5
 BATCH_SIZE = 64
 EPOCHS = 250
 PATIENCE = 50
-ALPHA = 0.3
+ALPHA = 0.4
 LR = 1e-3
+WD = 3e-3
+epochs_warmup = 50
+warmup_lr_init = 1e-05
+lr_min = 4e-09
 TRAIN = True
 
 SEED = Config.SEED
@@ -98,24 +103,46 @@ bfrb_classes = torch.tensor([gesture_mapping[cl] for cl in bfrb_gesture]) ### TA
 # ------------------ SELECT FEATURES AND PREPARE DATA FOR TRAINING ------------------------
 
 all_features = np.concatenate( (cols['imu'], cols['thm'], cols['tof']) ) 
+selected_tof = [f for f in cols['tof'] if 'v' not in f]
 
 
+idx_all_tof = [np.where(all_features == f)[0][0] for f in cols['tof']]                   ### TOF Features for later
 idx_imu = [np.where(all_features == f)[0][0] for f in selected_features]    ### select features from selected_features above
-idx_tof = np.where(np.isin(all_features, cols['tof']))[0]                   ### TOF Features for later
-idx_thm = np.where(np.isin(all_features, cols['thm']))[0]                   ### THM Features for later
+idx_tof = [np.where(all_features == f)[0][0] for f in selected_tof]                   ### TOF Features for later
+idx_thm = [np.where(all_features == f)[0][0] for f in cols['thm']]               ### THM Features for later
 
-X = X_train[:, :, idx_imu]   ## select idx features in X
+idx_all = idx_imu + idx_thm + idx_tof
+indices_branches = {
+    'imu': np.arange(len(idx_imu)), 
+    'thm': np.arange(len(idx_imu), len(idx_imu + idx_thm)), 
+    'tof': np.arange(len(idx_imu + idx_thm), len(idx_all))
+    }
+
+X = X_train[:, :, idx_all]   ## select idx features in X
 y = y_train                  ## labels 
 
 
+#X[:, :, indices_branches['thm'][0]:] = float('nan')
+# for sample in range(len(X)):
+#     if X[sample, :, indices_branches['imu']].shape[1] == 0:
+#         print("houla")
+
 #### NaN ? in DATA #### 
-nan_mask = torch.isnan(X)
+nan_mask = torch.isnan(X[:, :, indices_branches['imu']])
 nan_indices = torch.nonzero(nan_mask, as_tuple=True)
 print(f"number of NaN (detect possible FE errors): {len(np.unique(nan_indices[0].numpy()))}")
       
 if len(np.unique(nan_indices[0].numpy())) > 0:      
+    X[:, :, indices_branches['imu']] = torch.tensor(np.nan_to_num(X[:, :, indices_branches['imu']], nan=0.0))
+
+nan_mask = torch.isnan(X)
+nan_indices = torch.nonzero(nan_mask, as_tuple=True)
+      
+if len(np.unique(nan_indices[0].numpy())) > 0:      
     X = torch.tensor(np.nan_to_num(X, nan=0.0))
+
 ########################
+
 
 print(f"Data shape (X, y): {X.shape, y.shape}")
 
@@ -171,17 +198,21 @@ for fold, (train_idx, val_idx) in enumerate(sgkf.split(X, y, groups)):
         print(f"number of additional rotated features samples: {count}")
         print(f"shape of training data after augmentation (X, y): {X_tr.shape, y_tr.shape}\n")
 
-        #augmenter = Augment()
+        # augmenter = Augment()
 
         # augmenter = Augment(
         #     p_jitter=0.98, sigma=0.033, scale_range=(0.75,1.16),
         #     p_dropout=0.42,
         #     p_moda=0.39, drift_std=0.004, drift_max=0.39    
         # )
-
+        augmenter = Augment(
+            p_jitter=0.98, sigma=0.033, scale_range=(0.75,1.16),
+            p_dropout=0.42,
+            p_moda=0.39, drift_std=0.004, drift_max=0.39    
+        )
         #########################################
 
-        train_ds = SensorDataset(X_tr, y_tr, imu_dim = 7, alpha=ALPHA)  ### TRAINING ROTATION AUGMENTED DATA WITH MixUp \alpha 
+        train_ds = SensorDataset(X_tr, y_tr, imu_dim = len(idx_imu), alpha=ALPHA, augment=augmenter)  ### TRAINING ROTATION AUGMENTED DATA WITH MixUp \alpha 
 
 
         # CLASS IMBALANCE handling 
@@ -204,12 +235,19 @@ for fold, (train_idx, val_idx) in enumerate(sgkf.split(X, y, groups)):
 
 
     if TRAIN:
-        criterion = SoftCrossEntropy(bfrb_classes=bfrb_classes, gamma = .5, lamb = .5) # LOSS FUNCTION
+        criterion = SoftCrossEntropy() # LOSS FUNCTION bfrb_classes=bfrb_classes, gamma = .5, lamb = .5 
 
-        model = MiniGestureClassifier(imu_dim=X_tr.shape[2], hidden_dim=128, num_classes=len(class_weight)) # MODEL
-        optimizer = optim.Adam(model.parameters(), lr=LR) # OPTIMIZER
+        #model = MiniGestureClassifier(imu_dim=X_tr.shape[2], hidden_dim=128, num_classes=len(class_weight)) # MODEL
+        model = GlobalGestureClassifier(imu_dim=len(idx_imu), thm_tof_dim=len(idx_thm) + len(idx_tof),  hidden_dim=128, num_classes=len(class_weight)) # MODEL
+        optimizer = optim.Adam(model.parameters(), lr=LR) # OPTIMIZER  weight_decay=WD
 
-        best_score = train_model(model, train_loader, val_loader, optimizer, criterion, EPOCHS, DEVICE, bfrb_classes, patience=PATIENCE, fold = fold)
+        # warmup = epochs_warmup * BATCH_SIZE
+        # nsteps = EPOCHS * BATCH_SIZE
+        # scheduler = CosineLRScheduler(optimizer,
+        # warmup_t=warmup, warmup_lr_init=warmup_lr_init, warmup_prefix=True,
+        # t_initial=(nsteps - warmup), lr_min=lr_min) 
+
+        best_score = train_model(model, train_loader, val_loader, optimizer, criterion, EPOCHS, BATCH_SIZE, DEVICE, bfrb_classes, patience=PATIENCE, fold = fold, split_indices = indices_branches)
         best_scores.append(best_score)
     else:
         print("---- INFERENCE MODE ----")

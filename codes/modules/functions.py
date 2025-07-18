@@ -89,7 +89,7 @@ def check_gpu_availability():
 # Check GPU availability
 DEVICE = torch.device(check_gpu_availability())
 
-#print(f"✓ Configuration loaded for Kaggle environment (Device: {DEVICE})")
+print(f"✓ Configuration loaded for Kaggle environment (Device: {DEVICE})")
 
 
 def clean_data(data_sequences, cols, prefix = 'both'):
