@@ -119,13 +119,13 @@ class IMUEncoder(nn.Module):
         self.net = nn.Sequential(
             nn.Conv1d(input_dim, hidden_dim, kernel_size=3, padding=1),
             #nn.BatchNorm1d(hidden_dim),
-            nn.ReLU(inplace=True), #inplace=True
+            nn.ReLU(), #inplace=True
             nn.BatchNorm1d(hidden_dim),
             nn.Dropout(p=0.3), 
             #nn.MaxPool1d(kernel_size=2, stride=2),  # halves time length
             nn.Conv1d(hidden_dim, hidden_dim, kernel_size=3, padding=1),
             #nn.BatchNorm1d(hidden_dim),
-            nn.ReLU(inplace=True),
+            nn.ReLU(),
             nn.BatchNorm1d(hidden_dim),
             #nn.Dropout(p=0.2), 
             #nn.MaxPool1d(kernel_size=2, stride=2),   # halves again → total /4
@@ -143,13 +143,13 @@ class OptionalEncoder(nn.Module):
         self.net = nn.Sequential(
             nn.Conv1d(input_dim, hidden_dim, kernel_size=3, padding=1),
             nn.BatchNorm1d(hidden_dim),
-            nn.ReLU(inplace=True),
+            nn.ReLU(),
             #nn.BatchNorm1d(hidden_dim),
             nn.Dropout(p=0.3),
             #nn.MaxPool1d(kernel_size=2, stride=2),
             nn.Conv1d(hidden_dim, hidden_dim, kernel_size=3, padding=1),
             nn.BatchNorm1d(hidden_dim),
-            nn.ReLU(inplace=True),
+            nn.ReLU(),
             #nn.BatchNorm1d(hidden_dim),
             #nn.Dropout(p=0.2),
             #nn.MaxPool1d(kernel_size=2, stride=2)
@@ -199,17 +199,17 @@ class TOFEncoder3DWithSpatialAttention(nn.Module):
         self.conv3d = nn.Sequential(
             nn.Conv3d(in_channels, out_channels, kernel_size=(3, 3, 3), padding=(1, 1, 1)),
             nn.BatchNorm3d(out_channels),
-            nn.ReLU(inplace=True),
+            nn.ReLU(),
 
             nn.Conv3d(out_channels, hidden_dim, kernel_size=(3, 3, 3), padding=(1, 1, 1)),
             nn.BatchNorm3d(hidden_dim),
-            nn.ReLU(inplace=True),
+            nn.ReLU(),
         )
 
         # Spatial attention: per pixel over each 8x8 grid at each time step
         self.spatial_attn = nn.Sequential(
             nn.Conv2d(hidden_dim, hidden_dim // 2, kernel_size=1),
-            nn.ReLU(inplace=True),
+            nn.ReLU(),
             nn.Conv2d(hidden_dim // 2, 1, kernel_size=1),  # attention logits per pixel
         )
 
@@ -388,7 +388,7 @@ class GlobalGestureClassifier(nn.Module):
 
         self.classifier_head = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(inplace=True),
+            nn.ReLU(),
             nn.Dropout(p = 0.3),
             nn.Linear(hidden_dim, num_classes),
             #nn.Softmax()
@@ -724,10 +724,10 @@ class DeviceRotationAugment:
             x_rotated = []
             axes_choice = np.array(axes)
             for i in range(self.iter): #self.iter
-                #if (np.random.random() < self.p_rotation) and (len(axes_choice) > 0):
-                ax = axes_choice[i] #np.random.choice(axes_choice) # #
-                x_rotated.append(self.apply_rotation(xx, ax, seq_id, seqs_to_angle)) # subject_id, subject_to_angle)
-                    #axes_choice = np.delete(axes_choice, np.where(axes_choice == ax)) 
+                if (np.random.random() < self.p_rotation) and (len(axes_choice) > 0):
+                    ax = np.random.choice(axes_choice) # #axes_choice[i] #
+                    x_rotated.append(self.apply_rotation(xx, ax, seq_id, seqs_to_angle)) # subject_id, subject_to_angle)
+                    axes_choice = np.delete(axes_choice, np.where(axes_choice == ax)) 
             if len(x_rotated) > 0:
                 self.count += len(x_rotated)
                 x_rotated = [torch.tensor(x) for x in x_rotated]

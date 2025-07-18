@@ -66,7 +66,7 @@ def train_model(model, train_loader, val_loader, optimizer, criterion, epochs, b
             for inputs, targets in val_loader:
 
                 if hide_val_half and split_indices is not None:
-                    half = batch_size // 2
+                    half = min(batch_size // 2, inputs.shape[0] // 2)
                     x_front = inputs[:half]               
                     x_back  = inputs[half:].clone()   
                     x_back[:, :, idx_thm_tof] = 0.0    

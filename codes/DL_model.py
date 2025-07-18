@@ -104,19 +104,30 @@ bfrb_classes = torch.tensor([gesture_mapping[cl] for cl in bfrb_gesture]) ### TA
 
 all_features = np.concatenate( (cols['imu'], cols['thm'], cols['tof']) ) 
 selected_tof = [f for f in cols['tof'] if 'v' not in f]
+raw_tof = [f for f in cols['tof'] if 'v' in f]
+
+raw_tof_sorted = np.array([f'tof_{i}_v{j}' for i in range(1, 6) for j in range(64)])
+check_all_pixels = np.array([f in raw_tof for f in raw_tof_sorted]   )            ### THM Features for later
+
+if not np.all(check_all_pixels):
+    print(f"missing pixel raw data in TOF data: {np.array(raw_tof_sorted)[~check_all_pixels]}")
+
+raw_tof_sorted = list(raw_tof_sorted[check_all_pixels])
 
 
-idx_all_tof = [np.where(all_features == f)[0][0] for f in cols['tof']]                   ### TOF Features for later
 idx_imu = [np.where(all_features == f)[0][0] for f in selected_features]    ### select features from selected_features above
 idx_tof = [np.where(all_features == f)[0][0] for f in selected_tof]                   ### TOF Features for later
+idx_raw_tof = [np.where(all_features == f)[0][0] for f in raw_tof_sorted]                   ### TOF Features for later
 idx_thm = [np.where(all_features == f)[0][0] for f in cols['thm']]               ### THM Features for later
 
-idx_all = idx_imu + idx_thm + idx_tof
+idx_all = idx_imu + idx_thm + idx_tof + idx_raw_tof
 indices_branches = {
     'imu': np.arange(len(idx_imu)), 
     'thm': np.arange(len(idx_imu), len(idx_imu + idx_thm)), 
-    'tof': np.arange(len(idx_imu + idx_thm), len(idx_all))
+    'tof': np.arange(len(idx_imu + idx_thm), len(idx_imu + idx_thm + idx_tof)),
+    'tof_raw': np.arange(len(idx_imu + idx_thm + idx_tof), len(idx_all))
     }
+
 
 X = X_train[:, :, idx_all]   ## select idx features in X
 y = y_train                  ## labels 
@@ -193,7 +204,7 @@ for fold, (train_idx, val_idx) in enumerate(sgkf.split(X, y, groups)):
         #### DATA AUGMENTATION #####
         print("------ DATA AUGMENTATION: DEVICE ROTATION ------")
         rotation_augmented = DeviceRotationAugment(X_tr, y_tr, train_seq_ids,     
-                            seqs_by_subject, selected_features, p_rotation=1.1, small_rotation=2)
+                            seqs_by_subject, selected_features, p_rotation=0.7277884875101764, small_rotation=3.675393207357382, x_rot_range=(0., 6.234650364930556))
         X_tr, y_tr, count = rotation_augmented(axes=['z', 'x'])
         print(f"number of additional rotated features samples: {count}")
         print(f"shape of training data after augmentation (X, y): {X_tr.shape, y_tr.shape}\n")
