@@ -228,7 +228,7 @@ def objective(trial):
             model = MiniGestureClassifier(imu_dim=X_tr.shape[2], hidden_dim=128, num_classes=len(class_weight)) # MODEL
             optimizer = optim.Adam(model.parameters(), lr=LR) # OPTIMIZER
 
-            best_score = train_model(model, train_loader, val_loader, optimizer, criterion, EPOCHS, DEVICE, bfrb_classes, patience=PATIENCE, fold = fold, logger = logger)
+            best_score = train_model(model, train_loader, val_loader, optimizer, criterion, EPOCHS, BATCH_SIZE, DEVICE, bfrb_classes, patience=PATIENCE, fold = fold, logger = logger)
             best_scores.append(best_score)
         else:
             print("---- INFERENCE MODE ----")

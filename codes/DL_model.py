@@ -13,27 +13,31 @@ from modules.training_functions import *
 from modules.competition_metric import CompetitionMetric
 
 import sys
+from datetime import datetime
 
-from timm.scheduler import CosineLRScheduler
 
-print("")
-print("======== COMMENTS ========")
-print(" normal loss => gamma = 1.")
-print("+ balanced class weights for random sampling but not for loss function")
-print("-------------------------")
-print("")
+TRAIN = True
+
 
 N_SPLITS = 5
 BATCH_SIZE = 64
-EPOCHS = 250
-PATIENCE = 50
+EPOCHS = 160
+HIDDEN_DIM = 128
+PATIENCE = 45
 ALPHA = 0.4
 LR = 1e-3
-WD = 3e-3
-epochs_warmup = 50
-warmup_lr_init = 1e-05
-lr_min = 4e-09
-TRAIN = True
+
+normalisation_TOF_RAW = False
+normalisation_TOF_THM = True
+attention_for_fusion = True
+attention_pooled = True
+C_TOF_RAW = False
+ADD_TOF_TO_THM = True
+
+GAMMA = 0.5
+LAMB = 0.5
+L_IMU = 0.2
+
 
 SEED = Config.SEED
 reset_seed(SEED)
@@ -112,6 +116,8 @@ check_all_pixels = np.array([f in raw_tof for f in raw_tof_sorted]   )          
 if not np.all(check_all_pixels):
     print(f"missing pixel raw data in TOF data: {np.array(raw_tof_sorted)[~check_all_pixels]}")
 
+
+
 raw_tof_sorted = list(raw_tof_sorted[check_all_pixels])
 
 
@@ -127,6 +133,14 @@ indices_branches = {
     'tof': np.arange(len(idx_imu + idx_thm), len(idx_imu + idx_thm + idx_tof)),
     'tof_raw': np.arange(len(idx_imu + idx_thm + idx_tof), len(idx_all))
     }
+# else:
+#     idx_all = idx_imu + idx_thm + idx_raw_tof
+#     indices_branches = {
+#         'imu': np.arange(len(idx_imu)), 
+#         'thm': np.arange(len(idx_imu), len(idx_imu + idx_thm)), 
+#         'tof': [],
+#         'tof_raw': np.arange(len(idx_imu + idx_thm), len(idx_all))
+#         }
 
 
 X = X_train[:, :, idx_all]   ## select idx features in X
@@ -163,9 +177,43 @@ print(f"Data shape (X, y): {X.shape, y.shape}")
 class_weight = 0.7 * torch.ones(len(split_ids['classes'].keys()))
 class_weight[bfrb_classes] = 2.
 
+
+#### ---------------- PARAMETERS --------------------
+
+# device_rotation_params = {'p_rotation': 0.7497695732931614, 'small_rotation': 1.7353531580176353, 'max_x_rotation': 24.144699565481698}
+
+# ----------- ALL PARAMETERS TO SAVE IT ---------------
+all_parameters = {
+    "SEED": SEED,
+    "N_SPLITS": N_SPLITS,
+    "BATCH_SIZE": BATCH_SIZE,
+    "EPOCHS": EPOCHS,
+    "HIDDEN_DIM": HIDDEN_DIM,
+    "PATIENCE": PATIENCE,
+    "ALPHA":ALPHA,
+    "LR": LR,
+    "normalisation_TOF_RAW": normalisation_TOF_RAW,
+    "normalisation_TOF_THM": normalisation_TOF_THM,
+    "attention_for_fusion": attention_for_fusion,
+    "attention_pooled": attention_pooled,
+    "add_tof_features_to_thm": ADD_TOF_TO_THM,
+    "C_TOF_RAW": C_TOF_RAW,
+    "IMU_FEATURES": selected_features,
+    "THM-TOF FEATURES": selected_tof,
+    "TOF-RAW FEATURES": raw_tof_sorted,
+    "loss_GAMMA": GAMMA,
+    "loss_LAMBDA": LAMB,
+    "additionnal_IMU_loss": L_IMU,
+
+}
+
+
 # ------------------------------- TRAINING ---------------------------------
 
 sgkf = StratifiedGroupKFold(n_splits=N_SPLITS, shuffle=True, random_state = 39) #STRATIFIED k-Fold by group (subject_id)
+
+if not ADD_TOF_TO_THM:
+    indices_branches['tof'] = []
 
 train_ids = np.array(split_ids['train']['train_sequence_ids']) #seq_id of data sequences 
 groups = [split_ids['train']['train_sequence_subject'][seq_id] for seq_id in train_ids] #subject_id of data_sequences
@@ -174,7 +222,12 @@ groups = [split_ids['train']['train_sequence_subject'][seq_id] for seq_id in tra
 
 
 ### LOOP FOR EACH TRAINING FOLD
-best_scores = []
+best_scores = {
+    'mixture':[],
+    'imu_only':[],
+    'imu_tof_thm':[], 
+    }
+best_scores_inference = []
 for fold, (train_idx, val_idx) in enumerate(sgkf.split(X, y, groups)):
     print(f"\n===== FOLD {fold+1}/{N_SPLITS} =====\n")
     reset_seed(SEED)
@@ -204,7 +257,11 @@ for fold, (train_idx, val_idx) in enumerate(sgkf.split(X, y, groups)):
         #### DATA AUGMENTATION #####
         print("------ DATA AUGMENTATION: DEVICE ROTATION ------")
         rotation_augmented = DeviceRotationAugment(X_tr, y_tr, train_seq_ids,     
-                            seqs_by_subject, selected_features, p_rotation=0.7277884875101764, small_rotation=3.675393207357382, x_rot_range=(0., 6.234650364930556))
+                            seqs_by_subject, selected_features, 
+                            p_rotation=1.1, 
+                            small_rotation=2., 
+                            x_rot_range=(0., 30.)
+                            )
         X_tr, y_tr, count = rotation_augmented(axes=['z', 'x'])
         print(f"number of additional rotated features samples: {count}")
         print(f"shape of training data after augmentation (X, y): {X_tr.shape, y_tr.shape}\n")
@@ -246,20 +303,55 @@ for fold, (train_idx, val_idx) in enumerate(sgkf.split(X, y, groups)):
 
 
     if TRAIN:
-        criterion = SoftCrossEntropy() # LOSS FUNCTION bfrb_classes=bfrb_classes, gamma = .5, lamb = .5 
+        criterion = SoftCrossEntropy(bfrb_classes=bfrb_classes, gamma = GAMMA, lamb = LAMB) # LOSS FUNCTION bfrb_classes=bfrb_classes, gamma = .5, lamb = .5 
 
         #model = MiniGestureClassifier(imu_dim=X_tr.shape[2], hidden_dim=128, num_classes=len(class_weight)) # MODEL
-        model = GlobalGestureClassifier(imu_dim=len(idx_imu), thm_tof_dim=len(idx_thm) + len(idx_tof),  hidden_dim=128, num_classes=len(class_weight)) # MODEL
+        model = GlobalGestureClassifier(imu_dim=len(indices_branches['imu']), 
+                                        thm_tof_dim=len(indices_branches['thm']) + len(indices_branches['tof']), 
+                                        tof_raw_dim=len(indices_branches['tof_raw']),  
+                                        hidden_dim=HIDDEN_DIM, 
+                                        num_classes=len(class_weight), 
+                                        C_TOF_RAW=C_TOF_RAW,
+                                        norm_TOF_RAW=normalisation_TOF_RAW,
+                                        norm_TOF_THM=normalisation_TOF_THM,
+                                        attention_for_fusion=attention_for_fusion,
+                                        attention_pooled= attention_pooled
+                                        ) # MODEL
+        
+
+        #### SAVE HYPERPARAMETERS AND MODEL ARCHI ####
+        if fold == 0:
+            n_trial = 17
+            current_date = datetime.now()
+            formatted_date = current_date.strftime("%d-%m-%Y")
+            formatted_time = datetime.now().strftime("%H%M%S")
+
+            folder_date = 'trials_' + formatted_date
+            folder_trial = 'trial_' + str(n_trial)
+
+            EXPORT_DIR = os.path.join(Config.EXPORT_PARAMS_DIR, folder_date, folder_trial)
+            file_txt_path = os.path.join(EXPORT_DIR, 'trial_summary.txt')
+            file_pkl_path = os.path.join(EXPORT_DIR, 'all_parameters.pkl')
+            os.makedirs(EXPORT_DIR, exist_ok=True)  
+            save_hparams_and_architecture(all_parameters, model, file_txt_path)
+            save_hparams_and_architecture_to_pkl(all_parameters, model, file_pkl_path)
+        ##################################################
+
+
         optimizer = optim.Adam(model.parameters(), lr=LR) # OPTIMIZER  weight_decay=WD
 
-        # warmup = epochs_warmup * BATCH_SIZE
-        # nsteps = EPOCHS * BATCH_SIZE
-        # scheduler = CosineLRScheduler(optimizer,
-        # warmup_t=warmup, warmup_lr_init=warmup_lr_init, warmup_prefix=True,
-        # t_initial=(nsteps - warmup), lr_min=lr_min) 
-
-        best_score = train_model(model, train_loader, val_loader, optimizer, criterion, EPOCHS, BATCH_SIZE, DEVICE, bfrb_classes, patience=PATIENCE, fold = fold, split_indices = indices_branches)
-        best_scores.append(best_score)
+        best_score, best_score_imu_only, best_score_imu_tof_thm = train_model(model, train_loader, val_loader, 
+                                 optimizer, criterion, 
+                                 EPOCHS, BATCH_SIZE,
+                                 DEVICE, 
+                                 patience=PATIENCE, 
+                                 fold = fold, 
+                                 split_indices = indices_branches,
+                                 L_IMU= L_IMU
+                                 )
+        best_scores['mixture'].append(best_score)
+        best_scores['imu_only'].append(best_score_imu_only)
+        best_scores['imu_tof_thm'].append(best_score_imu_tof_thm)
     else:
         print("---- INFERENCE MODE ----")
         processing_dir = Config.EXPORT_DIR
@@ -272,10 +364,17 @@ for fold, (train_idx, val_idx) in enumerate(sgkf.split(X, y, groups)):
         preds_int = [inverse_map_classes[pred_str] for pred_str in preds_str]
         best_score, _, _ = competition_metric(y_val, preds_int)
     
-    best_scores.append(best_score)
+        best_scores_inference.append(best_score)
 
-for fold, score in enumerate(best_scores):
-    print(f" - Best score for fold {fold}: {score}")
+print(np.mean(best_scores['mixture']))
 
-print(f"mean score for all folds: {np.mean(best_scores)}")
+if TRAIN:
+    log_best_scores(best_scores, file_txt_path)
+
+
+
+# for fold, score in enumerate(best_scores):
+#     print(f" - Best score for fold {fold}: {score}")
+
+# print(f"mean score for all folds: {np.mean(best_scores)}")
 

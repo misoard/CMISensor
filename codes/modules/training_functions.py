@@ -5,16 +5,43 @@ from sklearn.metrics import recall_score
 import os
 
 
-def train_model(model, train_loader, val_loader, optimizer, criterion, epochs, batch_size, device, bfrb_classes, patience = 50, fold = None, logger = None, split_indices = None, scheduler = None, hide_val_half = True):
+def train_model(model, 
+                train_loader, val_loader, 
+                optimizer, criterion, 
+                epochs, batch_size, 
+                device, 
+                patience = 50, 
+                fold = None, 
+                logger = None, 
+                split_indices = None, 
+                scheduler = None, 
+                hide_val_half = True,
+                L_IMU = 0.2
+                ):
     reset_seed(42)
     model.to(device)
     early_stopper = EarlyStopping(patience=patience, mode='max', restore_best_weights=True, verbose=True, logger = logger)
     if split_indices is not None:
         idx_thm_tof = list(split_indices['thm']) + list(split_indices['tof'])
     
+    if logger is not None:
+        logger.info(f"lengths features: \
+                            {len(split_indices['imu'])} (IMU) \
+                            {len(idx_thm_tof)} (TOF-THM) \
+                            {len(split_indices['tof_raw'])} (TOF-RAW) \
+                            ")
+    else:
+        print(f"lengths features: \
+                            {len(split_indices['imu'])} (IMU) \
+                            {len(idx_thm_tof)} (TOF-THM) \
+                            {len(split_indices['tof_raw'])} (TOF-RAW) \
+                            ")
     best_score = 0
+    best_score_imu_only = 0
+    best_score_imu_tof_thm = 0
     i_scheduler = 0
     for epoch in range(1, epochs + 1):
+        #check_memory()
         model.train()
         train_loss = 0
         train_preds = []
@@ -31,15 +58,17 @@ def train_model(model, train_loader, val_loader, optimizer, criterion, epochs, b
             # print(targets[:5])
             # print(inputs[0, :10, 0])
             inputs, targets = inputs.to(device), targets.to(device)
+            #check_memory()
             optimizer.zero_grad()
             if split_indices is not None:
-                outputs, imu_logits = model(inputs[:, :, split_indices['imu']], inputs[:, :, idx_thm_tof]) #, phase_adj = inputs[:, :,  -1]
+                outputs, imu_logits = model(inputs[:, :, split_indices['imu']], inputs[:, :, idx_thm_tof], inputs[:, :, split_indices['tof_raw']]) #, phase_adj = inputs[:, :,  -1]
             else:
                 outputs = model(inputs) #, phase_adj = inputs[:, :,  -1]
+            #check_memory()
             #targets = targets * (1 - 0.1) + (0.1 / 18)
             imu_loss = criterion(imu_logits, targets)
             loss = criterion(outputs, targets) #, class_weight, bfrb_classes)
-            loss += 0.2 * imu_loss
+            loss += L_IMU * imu_loss
             loss.backward()
             optimizer.step()
             
@@ -52,7 +81,7 @@ def train_model(model, train_loader, val_loader, optimizer, criterion, epochs, b
             train_targets.extend(targets.argmax(1).cpu().numpy())
         
 
-        train_acc, train_binary_recall, train_macro_f1  = competition_metric(train_targets, train_preds)
+        train_acc, _, train_macro_f1  = competition_metric(train_targets, train_preds)
 
         # ---- Validation ----
         model.eval()
@@ -64,7 +93,7 @@ def train_model(model, train_loader, val_loader, optimizer, criterion, epochs, b
 
         with torch.no_grad():
             for inputs, targets in val_loader:
-
+                #check_memory()
                 if hide_val_half and split_indices is not None:
                     half = min(batch_size // 2, inputs.shape[0] // 2)
                     x_front = inputs[:half]               
@@ -76,16 +105,16 @@ def train_model(model, train_loader, val_loader, optimizer, criterion, epochs, b
 
                 inputs, targets = inputs.to(device), targets.to(device)
                 if split_indices is not None:
-                    outputs, imu_logits = model(inputs[:, :, split_indices['imu']], inputs[:, :, idx_thm_tof]) 
+                    outputs, imu_logits = model(inputs[:, :, split_indices['imu']], inputs[:, :, idx_thm_tof], inputs[:, :, split_indices['tof_raw']]) 
                     assert x_back[:, :, split_indices['imu']].shape[2] > 0, "IMU split is empty!"
-                    outputs_imu_only, _ = model(x_back[:, :, split_indices['imu']], x_back[:, :, idx_thm_tof]) 
-                    outputs_all, _ = model(x_front[:, :, split_indices['imu']], x_front[:, :, idx_thm_tof]) 
+                    outputs_imu_only, _ = model(x_back[:, :, split_indices['imu']], x_back[:, :, idx_thm_tof], x_back[:, :, split_indices['tof_raw']]) 
+                    outputs_all, _ = model(x_front[:, :, split_indices['imu']], x_front[:, :, idx_thm_tof], x_front[:, :, split_indices['tof_raw']]) 
                 else:
                     outputs = model(inputs) #, phase_adj = inputs[:, :,  -1]               
                 
                 loss = criterion(outputs, targets) #, class_weight, bfrb_classes)
                 imu_loss = criterion(imu_logits, targets) #, class_weight, bfrb_classes)
-                loss += 0.2 * imu_loss
+                loss += L_IMU * imu_loss
                 val_loss += loss.item()
 
                 if split_indices is not None:
@@ -119,14 +148,9 @@ def train_model(model, train_loader, val_loader, optimizer, criterion, epochs, b
                 name += f"_fold_{fold}.pth"
             else:
                 name += ".pth"
-            torch.save(early_stopper.best_model_state, os.path.join(Config.EXPORT_MODELS_PATH, name ))
+            #torch.save(early_stopper.best_model_state, os.path.join(Config.EXPORT_MODELS_PATH, name ))
 
-        if early_stopper.early_stop:
-            if logger is not None:
-                logger.info("Training stopped early.")
-            else:
-                print("Training stopped early.")
-            break
+        
         
         if split_indices is not None:
             val_acc_all, _, _ = competition_metric(val_targets['all'], val_preds['all'])    
@@ -135,13 +159,42 @@ def train_model(model, train_loader, val_loader, optimizer, criterion, epochs, b
                 logger.info(f"Epoch {epoch}/{epochs} - Train Loss: {train_loss:.4f}, Acc: {train_acc:.4f}, Macro: {train_macro_f1:.4f} | Val Loss: {val_loss:.4f}, Acc: {val_acc:.4f},  Acc (imu only): {val_acc_imu_only:.4f},  Acc (imu+thm+tof): {val_acc_all:.4f}, Macro: {val_macro_f1:.4f}")
             else:
                 print(f"Epoch {epoch}/{epochs} - Train Loss: {train_loss:.4f}, Acc: {train_acc:.4f}, Macro: {train_macro_f1:.4f} | Val Loss: {val_loss:.4f}, Acc: {val_acc:.4f},  Acc (imu only): {val_acc_imu_only:.4f},   Acc (imu+thm+tof): {val_acc_all:.4f},  Macro: {val_macro_f1:.4f}")
+        
+            ### BEST IMU-ONLY MODEL ###
+            if  val_acc_imu_only > best_score_imu_only:
+                best_score_imu_only = val_acc_imu_only
+                name = "best_model_imu_only"
+                if fold is not None:
+                    name += f"_fold_{fold}.pth"
+                else:
+                    name += ".pth"
+                #torch.save(model.state_dict(), os.path.join(Config.EXPORT_MODELS_PATH, name ))
+        
+            ### BEST IMU-TOF-THM MODEL ###
+            if  val_acc_all > best_score_imu_tof_thm:
+                best_score_imu_tof_thm = val_acc_all
+                name = "best_model_imu_tof_thm"
+                if fold is not None:
+                    name += f"_fold_{fold}.pth"
+                else:
+                    name += ".pth"
+                #torch.save(model.state_dict(), os.path.join(Config.EXPORT_MODELS_PATH, name ))
+        
         else:
             if logger is not None:
                 logger.info(f"Epoch {epoch}/{epochs} - Train Loss: {train_loss:.4f}, Acc: {train_acc:.4f}, Macro: {train_macro_f1:.4f} | Val Loss: {val_loss:.4f}, Acc: {val_acc:.4f}, Macro: {val_macro_f1:.4f}")
             else:
                 print(f"Epoch {epoch}/{epochs} - Train Loss: {train_loss:.4f}, Acc: {train_acc:.4f}, Macro: {train_macro_f1:.4f} | Val Loss: {val_loss:.4f}, Acc: {val_acc:.4f}, Macro: {val_macro_f1:.4f}")
 
-    return best_score
+        if early_stopper.early_stop:
+            if logger is not None:
+                logger.info("Training stopped early.")
+            else:
+                print("Training stopped early.")
+            break
+
+
+    return best_score, best_score_imu_only, best_score_imu_tof_thm 
 
 
 class SoftCrossEntropy:
@@ -195,9 +248,9 @@ class SoftCrossEntropy:
 
 
             if self.gamma is not None and self.lamb is None:
-                return  self.gamma * weighted_kl + (1. - self.gamma) * brfb_loss 
+                return  weighted_kl + self.gamma * brfb_loss 
             if self.gamma is None and self.lamb is not None:
-                return  self.lamb * weighted_kl + (1. - self.lamb) * binary_loss 
+                return  weighted_kl + self.lamb * binary_loss 
             if self.gamma is not None and self.lamb is not None:
                 return   weighted_kl + self.gamma * brfb_loss + self.lamb * binary_loss    
         else:

@@ -15,7 +15,8 @@ from sklearn.metrics import f1_score,  recall_score
 import torch
 import polars as pl
 from pathlib import Path
-
+import inspect
+import psutil
 
 warnings.filterwarnings('ignore')
 
@@ -43,6 +44,7 @@ class Config:
         EXPORT_MODELS_PATH =  "/Users/mathieuisoard/Documents/kaggle-competitions/CMI-sensor-competition/github/models" 
         OPTUNA_PATH_SAVED =   "/Users/mathieuisoard/Documents/kaggle-competitions/CMI-sensor-competition/github/optuna_data" 
         OPTUNA_PATH_LOGS =   "/Users/mathieuisoard/Documents/kaggle-competitions/CMI-sensor-competition/github/codes/logs_optuna" 
+        EXPORT_PARAMS_DIR =   "/Users/mathieuisoard/Documents/kaggle-competitions/CMI-sensor-competition/github/codes/trials" 
  
     
     elif parts[0] == 'home':
@@ -54,6 +56,7 @@ class Config:
         EXPORT_MODELS_PATH =  "/home/mathieuisoard/remote-github/models_from_gcloud" 
         OPTUNA_PATH_SAVED =   "/home/mathieuisoard/remote-github/optuna_data" 
         OPTUNA_PATH_LOGS =   "/home/mathieuisoard/remote-github/codes/logs_optuna" 
+        EXPORT_PARAMS_DIR =   "/home/mathieuisoard/remote-github/codes/trials" 
 
     else:
         print("NEW ROOT DIRECTORY") 
@@ -63,6 +66,7 @@ class Config:
     os.makedirs(EXPORT_MODELS_PATH, exist_ok=True)                                 
     os.makedirs(OPTUNA_PATH_SAVED, exist_ok=True)                                 
     os.makedirs(OPTUNA_PATH_LOGS, exist_ok=True) 
+    os.makedirs(EXPORT_PARAMS_DIR, exist_ok=True) 
 
     # Training parameters
     SEED = 42
@@ -921,3 +925,63 @@ def reset_seed(seed=42):
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
+
+#### TO STORE TRIALS #####
+
+def save_hparams_and_architecture(hparams: dict, model: torch.nn.Module, file_txt_path: str):
+    with open(file_txt_path, 'w') as f:
+
+        f.write("======== COMMENTS ========\n")
+        if not hparams['C_TOF_RAW']:
+            f.write("C = 1 for weights TOF RAW (same weights accross all TOF)\n")
+        else:
+            f.write("C = 5 for weights TOF RAW (diff weights accross all TOF)\n")
+        f.write(f"Normalization with mask 1 for TOF RAW = {hparams['normalisation_TOF_RAW']}\n")
+        f.write(f"Normalization with mask 1 for TOF-THM = {hparams['normalisation_TOF_THM']}\n")
+        f.write(f"Fused attention gate = {hparams['attention_for_fusion']}\n")
+        f.write(f"Pooled attention gate = {hparams['attention_pooled']}\n")
+
+        f.write("===== Hyperparameters =====\n")
+        for k, v in hparams.items():
+            f.write(f"{k}: {v}\n")
+        
+        f.write("\n===== Model Architecture =====\n")
+        f.write(str(model))
+
+        f.write("\n\n===== Forward Method =====\n")
+        f.write(inspect.getsource(model.forward))
+
+
+def log_best_scores(scores_dict: dict, file_txt_path: str):
+    """
+    scores_dict format:
+    {
+        'mixture': [0.75, 0.78, 0.72, 0.74, 0.77],
+        'imu_only': [...],
+        'imu_tof_thm': [...],
+    }
+    """
+    with open(file_txt_path, 'a') as f:
+        f.write("\n===== Best Scores per Fold =====\n")
+        for key, scores in scores_dict.items():
+            best = np.mean(scores)
+            f.write(f"Mean-fold {key} score: {best:.4f} (Fold scores: {scores})\n")
+
+def save_hparams_and_architecture_to_pkl(hparams: dict, model: torch.nn.Module, file_pkl_path: str):
+    data_to_save = {
+        'hyperparams': hparams,
+        'model_architecture': str(model)
+    }
+    with open(file_pkl_path, 'wb') as f:
+        pickle.dump(data_to_save, f)
+
+def bytes_to_gb(x):
+    return round(x / (1024**3), 2)
+
+def check_memory():
+    mem = psutil.virtual_memory()
+    print(f"Memory usage:")
+    print(f"  Total     : {bytes_to_gb(mem.total)} GB")
+    print(f"  Used      : {bytes_to_gb(mem.used)} GB")
+    print(f"  Available : {bytes_to_gb(mem.available)} GB")
+    print(f"  Percent   : {mem.percent}%")

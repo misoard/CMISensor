@@ -119,13 +119,13 @@ class IMUEncoder(nn.Module):
         self.net = nn.Sequential(
             nn.Conv1d(input_dim, hidden_dim, kernel_size=3, padding=1),
             #nn.BatchNorm1d(hidden_dim),
-            nn.ReLU(), #inplace=True
+            nn.ReLU(inplace=True), #inplace=True
             nn.BatchNorm1d(hidden_dim),
             nn.Dropout(p=0.3), 
             #nn.MaxPool1d(kernel_size=2, stride=2),  # halves time length
             nn.Conv1d(hidden_dim, hidden_dim, kernel_size=3, padding=1),
             #nn.BatchNorm1d(hidden_dim),
-            nn.ReLU(),
+            nn.ReLU(inplace=True),
             nn.BatchNorm1d(hidden_dim),
             #nn.Dropout(p=0.2), 
             #nn.MaxPool1d(kernel_size=2, stride=2),   # halves again → total /4
@@ -138,22 +138,23 @@ class IMUEncoder(nn.Module):
         return out
 
 class OptionalEncoder(nn.Module):
-    def __init__(self, input_dim, hidden_dim):
+    def __init__(self, input_dim, hidden_dim, norm = True):
         super().__init__()
         self.net = nn.Sequential(
             nn.Conv1d(input_dim, hidden_dim, kernel_size=3, padding=1),
             nn.BatchNorm1d(hidden_dim),
-            nn.ReLU(),
+            nn.ReLU(inplace=True),
             #nn.BatchNorm1d(hidden_dim),
             nn.Dropout(p=0.3),
             #nn.MaxPool1d(kernel_size=2, stride=2),
             nn.Conv1d(hidden_dim, hidden_dim, kernel_size=3, padding=1),
             nn.BatchNorm1d(hidden_dim),
-            nn.ReLU(),
+            nn.ReLU(inplace=True),
             #nn.BatchNorm1d(hidden_dim),
             #nn.Dropout(p=0.2),
             #nn.MaxPool1d(kernel_size=2, stride=2)
         )
+        self.norm = norm
 
     def forward(self, x, mask):
         # x: [B, T, input_dim] → [B, input_dim, T]
@@ -162,16 +163,17 @@ class OptionalEncoder(nn.Module):
 
         # Adjust mask accordingly by downsampling (average pooling)
         # mask: [B, T]
-        mask = mask.unsqueeze(1).float()  # [B, 1, T]
+        #mask = mask.unsqueeze(1).float()  # [B, 1, T]
         #mask = F.avg_pool1d(mask, kernel_size=2, stride=2)  # [B, 1, T/2]
         #mask = F.avg_pool1d(mask, kernel_size=2, stride=2)  # [B, 1, T/4]
-        mask = mask.squeeze(1)  # [B, T/4]
+        #mask = mask.squeeze(1)  # [B, T/4]
 
-        out = out * mask.unsqueeze(1)  # [B, hidden_dim, T/4]
+        #out = out * mask.unsqueeze(1)  # [B, hidden_dim, T]
 
         #Normalize by sum of mask per timestep (avoid div zero)
-        norm = mask.sum(dim=1, keepdim=True).clamp(min=1e-6)  # [B, 1]
-        out = out / norm.unsqueeze(1)  # broadcast on hidden_dim
+        if self.norm: 
+            norm_mask = mask.sum(dim=1, keepdim=True).clamp(min=1e-6)  # [B, 1]
+            out = out / norm_mask.unsqueeze(1)  # broadcast on hidden_dim
 
         return out
 
@@ -199,17 +201,17 @@ class TOFEncoder3DWithSpatialAttention(nn.Module):
         self.conv3d = nn.Sequential(
             nn.Conv3d(in_channels, out_channels, kernel_size=(3, 3, 3), padding=(1, 1, 1)),
             nn.BatchNorm3d(out_channels),
-            nn.ReLU(),
+            nn.ReLU(inplace=True),
 
             nn.Conv3d(out_channels, hidden_dim, kernel_size=(3, 3, 3), padding=(1, 1, 1)),
             nn.BatchNorm3d(hidden_dim),
-            nn.ReLU(),
+            nn.ReLU(inplace=True),
         )
 
         # Spatial attention: per pixel over each 8x8 grid at each time step
         self.spatial_attn = nn.Sequential(
             nn.Conv2d(hidden_dim, hidden_dim // 2, kernel_size=1),
-            nn.ReLU(),
+            nn.ReLU(inplace=True),
             nn.Conv2d(hidden_dim // 2, 1, kernel_size=1),  # attention logits per pixel
         )
 
@@ -243,7 +245,41 @@ class TOFEncoder3DWithSpatialAttention(nn.Module):
 
         return aggregated  # [B, hidden_dim, T]
 
+class TOFEncoder(nn.Module):
+    def __init__(self, hidden_dim, C, H, W, C_TOF_RAW = False, norm = False):
+        super().__init__()
+        if C_TOF_RAW:
+            self.tof_spatial_weight = nn.Parameter(torch.ones(1, 5, H, W))  # Learnable
+        else:
+            self.tof_spatial_weight = nn.Parameter(torch.ones(1, 1, H, W))  # Learnable
 
+        self.spatial_pool = nn.AdaptiveAvgPool2d(1)  # or MaxPool2d or Flatten
+        self.tof_post = nn.Sequential(
+            nn.Linear(C, hidden_dim),  # or Conv1D
+            nn.ReLU(),
+        )
+        self.H = H
+        self.W = W
+        self.C = C
+
+        self.norm = norm
+    
+    def forward(self, tof_raw, mask_ones):
+        B, T, _ = tof_raw.shape
+
+        tof_raw =  tof_raw.reshape(B, T, self.C, self.H, self.W) #[B, T, 5, 8, 8] 
+        #tof_raw = tof_raw.permute(0, 2, 1, 3, 4)                
+
+        tof_raw_weighted = tof_raw * self.tof_spatial_weight  # Broadcasting over batch and channel
+        pooled = self.spatial_pool(tof_raw_weighted)  # [B, T, 5, 1, 1]
+        pooled = pooled.squeeze(-1).squeeze(-1)#.permute(0, 2, 1)  # [B, T, 5]
+        tof_raw_feat = self.tof_post(pooled)  # [B, T, hidden_dim]  
+
+        if self.norm:
+            norm_mask = mask_ones.sum(dim=1, keepdim=True).clamp(min=1e-6)  # [B, 1]
+            tof_raw_feat = tof_raw_feat / norm_mask.unsqueeze(1)  # broadcast on hidden_dim
+
+        return tof_raw_feat.permute(0, 2, 1) # [B, hidden_dim, T]  
 
 
 class GatedFusion(nn.Module):
@@ -266,7 +302,7 @@ class GatedFusion(nn.Module):
         return fused.permute(0, 2, 1)  # [B, hidden_dim, T]
 
 class AttentionFusion(nn.Module):
-    def __init__(self, hidden_dim, num_modalities=2):
+    def __init__(self, hidden_dim, num_modalities=3):
         super().__init__()
         self.query = nn.Linear(hidden_dim, hidden_dim)
         self.keys = nn.ModuleList([nn.Linear(hidden_dim, hidden_dim) for _ in range(num_modalities)])
@@ -361,21 +397,47 @@ class GestureClassifier(nn.Module):
     
 
 class GlobalGestureClassifier(nn.Module):
-    def __init__(self, imu_dim, hidden_dim, num_classes, thm_tof_dim = None, p_drop_tof = 0.): # tabular_dim = None
+    def __init__(self, 
+                 imu_dim, 
+                 hidden_dim, 
+                 num_classes, 
+                 thm_tof_dim = None, 
+                 tof_raw_dim = None, 
+                 C_TOF_RAW = False,
+                 norm_TOF_THM = True,
+                 norm_TOF_RAW = False,
+                 attention_for_fusion = True,
+                 attention_pooled = True,
+                 ): # tabular_dim = None
         super().__init__()
 
         if thm_tof_dim is None:
             thm_tof_dim = imu_dim
         
         self.thm_tof_dim = thm_tof_dim
+        self.tof_raw_dim = tof_raw_dim
+
+        self.attention_pooled = attention_pooled
+        self.attention_for_fusion = attention_for_fusion
 
         self.imu_encoder = IMUEncoder(imu_dim, hidden_dim)
-        self.attn_pool = AttentionPooling(hidden_dim)
+        if self.attention_pooled:
+            self.attn_pool = AttentionPooling(hidden_dim)
 
-        self.thm_tof_encoder = OptionalEncoder(thm_tof_dim, hidden_dim)
+        self.thm_tof_encoder = OptionalEncoder(thm_tof_dim, hidden_dim, norm=norm_TOF_THM)
+        self.tof_pixels = TOFEncoder(hidden_dim, C = 5, H = 8, W = 8, C_TOF_RAW=C_TOF_RAW, norm=norm_TOF_RAW)
+#         self.tof_spatial_weight = nn.Parameter(torch.ones(1, 1, 8, 8))  # Learnable
+#         self.spatial_pool = nn.AdaptiveAvgPool2d(1)  # or MaxPool2d or Flatten
+#         self.tof_post = nn.Sequential(
+#             nn.Linear(5, hidden_dim),  # or Conv1D
+#             nn.ReLU(),
+# )
 
-        self.gated_fusion = GatedFusion(hidden_dim, num_modalities=2)
-        self.attention_fusion = AttentionFusion(hidden_dim, num_modalities=2)
+        self.gated_fusion = GatedFusion(hidden_dim, num_modalities=3)
+        if self.attention_for_fusion:
+            self.attention_fusion = AttentionFusion(hidden_dim, num_modalities=3)
+            self.alpha = nn.Parameter(torch.tensor(0.0))  # sigmoid(0) = 0.5
+        
         self.final_fusion = nn.Sequential(
             nn.Linear(2 * hidden_dim, hidden_dim),
             nn.ReLU(inplace=True),
@@ -383,12 +445,10 @@ class GlobalGestureClassifier(nn.Module):
         )
         #self.bilstm = nn.LSTM(hidden_dim * 2, hidden_dim, bidirectional=True, batch_first=True)
         #self.classifier_rnn = nn.GRU(hidden_dim, hidden_dim, batch_first=True, bidirectional=True)
-        self.alpha = nn.Parameter(torch.tensor(0.0))  # sigmoid(0) = 0.5
-        self.p_drop_tof = p_drop_tof
 
         self.classifier_head = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
+            nn.ReLU(inplace=True),
             nn.Dropout(p = 0.3),
             nn.Linear(hidden_dim, num_classes),
             #nn.Softmax()
@@ -401,7 +461,7 @@ class GlobalGestureClassifier(nn.Module):
             nn.Linear(hidden_dim, num_classes)
         )
 
-    def forward(self, imu, thm_tof=None): #, tabular_feats=None
+    def forward(self, imu, thm_tof=None, tof_raw = None): #, tabular_feats=None
         B, T, _ = imu.shape
 
         imu_feat = self.imu_encoder(imu)  # [B, hidden_dim, T]
@@ -412,31 +472,32 @@ class GlobalGestureClassifier(nn.Module):
             thm_tof = torch.zeros_like(imu)
             tof_mask = torch.zeros(B, T, device=imu.device)
         else:
-            tof_mask = (~torch.isnan(thm_tof).any(dim=2)).float()
+            tof_mask = torch.ones( B, T, device = thm_tof.device ) # (~torch.isnan(thm_tof).any(dim=2)).float() #(thm_tof != 0).float() #
 
-        # #tof_mask_drop = torch.ones_like(tof_mask)
-        # if self.training and torch.rand(1).item() < self.p_drop_tof:
-        #     thm_tof = torch.zeros_like(thm_tof)
-        #     #tof_mask_drop = torch.zeros(B, T, device=imu.device)
-    
+        if tof_raw is None:
+            tof_raw = torch.zeros_like(imu)
+            tof_raw_mask = torch.zeros(B, T, device=imu.device)
+        else:
+            tof_raw_mask = torch.ones( B, T, device = thm_tof.device )
+
 
         thm_tof_feat = self.thm_tof_encoder(thm_tof, tof_mask)  # [B, hidden_dim, T]
-        attn =  self.attention_fusion([imu_feat, thm_tof_feat])  # [B, hidden_dim, T]
-        gated =  self.gated_fusion([imu_feat, thm_tof_feat])  # [B, hidden_dim, T]
-        
+        tof_raw_feat = self.tof_pixels(tof_raw, tof_raw_mask)
 
-        alpha = torch.sigmoid(self.alpha).view(1, -1, 1)  # shape [1, C, 1]
-        # if thm_tof is None or tof_mask_drop.sum() == 0:
-        #     print("houla")
-        #     alpha = torch.ones_like(alpha)  # full weight to gated (IMU)
-        
-        fused = alpha * gated + (1 - alpha) * attn  # broadcast over B, T
-        pooled_fused= self.attn_pool(fused) #fused.mean(dim= 2) #
-        #mean_pooled = gated.mean(dim=2)
-        #max_pooled = gated.max(dim=2).values
+        gated =  self.gated_fusion([imu_feat, thm_tof_feat, tof_raw_feat])  # [B, hidden_dim, T]
 
-        #pooled_imu = F.dropout(pooled_imu, p=0.2, training=self.training)
-        #pooled_fused = F.dropout(pooled_fused, p=0.2, training=self.training)
+        if self.attention_for_fusion:
+            attn =  self.attention_fusion([imu_feat, thm_tof_feat, tof_raw_feat])  # [B, hidden_dim, T]
+            alpha = torch.sigmoid(self.alpha).view(1, -1, 1)  # shape [1, C, 1] 
+            fused = alpha * gated + (1 - alpha) * attn  # broadcast over B, T
+        else:
+            fused = gated
+
+        if self.attention_pooled:     
+            pooled_fused= self.attn_pool(fused) #fused.mean(dim= 2) #
+        else:
+            pooled_fused= fused.mean(dim= 2) #fused.mean(dim= 2) #
+
 
         pooled = self.final_fusion(torch.cat([pooled_imu, pooled_fused], dim=1))
         #pooled = torch.cat([pooled_imu, pooled_fused], dim=1)
@@ -724,10 +785,10 @@ class DeviceRotationAugment:
             x_rotated = []
             axes_choice = np.array(axes)
             for i in range(self.iter): #self.iter
-                if (np.random.random() < self.p_rotation) and (len(axes_choice) > 0):
-                    ax = np.random.choice(axes_choice) # #axes_choice[i] #
-                    x_rotated.append(self.apply_rotation(xx, ax, seq_id, seqs_to_angle)) # subject_id, subject_to_angle)
-                    axes_choice = np.delete(axes_choice, np.where(axes_choice == ax)) 
+                #if (np.random.random() < self.p_rotation) and (len(axes_choice) > 0):
+                ax = axes_choice[i]  #np.random.choice(axes_choice) # ##
+                x_rotated.append(self.apply_rotation(xx, ax, seq_id, seqs_to_angle)) # subject_id, subject_to_angle)
+                    #axes_choice = np.delete(axes_choice, np.where(axes_choice == ax)) 
             if len(x_rotated) > 0:
                 self.count += len(x_rotated)
                 x_rotated = [torch.tensor(x) for x in x_rotated]
