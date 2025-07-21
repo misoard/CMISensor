@@ -612,7 +612,7 @@ class EarlyStopping:
 
 
 class SensorDataset(Dataset):
-    def __init__(self, X, y, imu_dim, alpha = None, augment = None, training = True):
+    def __init__(self, X, y, imu_dim, alpha = 0., augment = None, training = True):
         self.X = torch.tensor(X, dtype=torch.float32)
         self.y = torch.tensor(y, dtype=torch.long)
         self.alpha = alpha
@@ -632,7 +632,7 @@ class SensorDataset(Dataset):
             x1 = self.augment(x1, imu_dim = self.imu_dim)
             x1 = torch.tensor(x1,  dtype=torch.float32)
             
-        if self.alpha is not None:
+        if self.alpha > 1e-6:
             rand_idx = np.random.randint(0, len(self.X) - 1)
             x2, y2 = self.X[rand_idx], self.y[rand_idx]
 

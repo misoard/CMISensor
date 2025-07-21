@@ -17,7 +17,7 @@ from datetime import datetime
 
 
 TRAIN = True
-
+N_TRIAL = 18
 
 N_SPLITS = 5
 BATCH_SIZE = 64
@@ -34,8 +34,8 @@ attention_pooled = True
 C_TOF_RAW = False
 ADD_TOF_TO_THM = True
 
-GAMMA = 0.5
-LAMB = 0.5
+GAMMA = 0.2
+LAMB = 0.
 L_IMU = 0.2
 
 
@@ -321,7 +321,7 @@ for fold, (train_idx, val_idx) in enumerate(sgkf.split(X, y, groups)):
 
         #### SAVE HYPERPARAMETERS AND MODEL ARCHI ####
         if fold == 0:
-            n_trial = 17
+            n_trial = N_TRIAL
             current_date = datetime.now()
             formatted_date = current_date.strftime("%d-%m-%Y")
             formatted_time = datetime.now().strftime("%H%M%S")
