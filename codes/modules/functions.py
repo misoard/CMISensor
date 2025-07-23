@@ -17,6 +17,8 @@ import polars as pl
 from pathlib import Path
 import inspect
 import psutil
+from scipy.signal import welch
+from scipy.stats import entropy
 
 warnings.filterwarnings('ignore')
 
@@ -468,6 +470,44 @@ def remove_frequency_component(signal, freq, sampling_rate, bandwidth=1.0, order
 
     return filtered_signal
 
+
+def extract_freq_features(signal, fs=10):  # signal: [T, 3] for x,y,z IMU
+    features = []
+    for axis in range(signal.shape[1]):
+        f, Pxx = welch(signal[:, axis], fs=fs, nperseg=fs)
+        Pxx /= Pxx.sum()  # Normalize power spectrum
+
+        centroid = np.sum(f * Pxx)
+        entropy_val = entropy(Pxx)
+        rolloff = f[np.where(np.cumsum(Pxx) >= 0.85)[0][0]]
+        peak_freq = f[np.argmax(Pxx)]
+        flatness = np.exp(np.mean(np.log(Pxx + 1e-8))) / (np.mean(Pxx) + 1e-8)
+
+        features += [centroid, entropy_val, rolloff, peak_freq, flatness]
+
+    return features  # [5 features x 3 axes = 15 features]
+
+def sliding_window_freq_features(data_sequence, fs=10, window_size=10, stride=10):
+    """
+    data: (N, T, C) - batch of sequences
+    returns: (N, T_new, F_freq)
+    """
+    names = ['centroid', 'entropy_val', 'rolloff', 'peak_freq', 'flatness']
+    data_sequence_with_FFT = data_sequence.copy()
+    signal = data_sequence[['acc_x', 'acc_y', 'acc_z']].to_numpy()
+    T, _ = signal.shape
+    features = []
+    for i in range(0, T - window_size + 1, stride):
+        window = signal[i:i+window_size, :]  # (N, w, C)
+        f_list = extract_freq_features(window, fs=fs)  # for each sequence
+        for j in range(window_size):
+            features.append(f_list)  # (T, F_freq)
+    print(np.array(features).shape)
+    data_sequence_with_FFT[names] = np.array(features)
+    # Stack over time: (T_new, N, F) → transpose → (N, T_new, F)
+    return data_sequence_with_FFT
+
+
 def compute_theta_phi_features(sequence_data):
     sequence_data_theta_phi = sequence_data.copy()
         
@@ -724,6 +764,7 @@ def wrapper_data( TRAIN = True, split = False):
             data_sequence = add_gesture_phase(data_sequence)
             data_sequence = compute_acceleration_features(data_sequence)
             data_sequence = compute_angular_features(data_sequence)
+            data_sequence = sliding_window_freq_features(data_sequence)
             #data_sequence = compute_fft_features(data_sequence)
             #data_sequence = compute_theta_phi_features(data_sequence)
             #data_sequence = compute_corr_and_svd_features(data_sequence)
