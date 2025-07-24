@@ -231,7 +231,7 @@ def clean_and_check_quaternion(data):
         print("")
     return data_clean
 
-def compute_acceleration_features(sequence_data):
+def compute_acceleration_features(sequence_data, demographics):
     sequence_data_with_acc = sequence_data.copy()
     correct_rot_order = ['rot_x', 'rot_y', 'rot_z', 'rot_w']
     correct_acc_order = ['acc_x', 'acc_y', 'acc_z']
@@ -278,9 +278,15 @@ def compute_acceleration_features(sequence_data):
     sequence_data_with_acc['acc_norm_jerk'] = sequence_data_with_acc['acc_norm'].diff().fillna(0)
     sequence_data_with_acc['linear_acc_norm_jerk'] =  sequence_data_with_acc['linear_acc_norm'].diff().fillna(0)
 
+    subject = sequence_data['subject'].iloc[0]
+    handedness = demographics[demographics['subject'] == subject]['handedness'].iloc[0] ## (0): left, (1): right
+    if handedness == 0:
+        sequence_data_with_acc['acc_x'] = - sequence_data_with_acc['acc_x'] #+ (-0.8526133780336856 + 0.3518238644621146)
+        sequence_data_with_acc['linear_acc_x'] = - sequence_data_with_acc['linear_acc_x'] #+ (-0.8526133780336856 + 0.3518238644621146)
+
     return sequence_data_with_acc
 
-def compute_angular_features(sequence_data, time_delta = 10):
+def compute_angular_features(sequence_data, demographics, time_delta = 10):
     sequence_data_with_ang_vel = sequence_data.copy()
     correct_rot_order = ['rot_x', 'rot_y', 'rot_z', 'rot_w']
     quats = sequence_data[correct_rot_order].values
@@ -320,6 +326,13 @@ def compute_angular_features(sequence_data, time_delta = 10):
 
     sequence_data_with_ang_vel[['ang_vel_x', 'ang_vel_y', 'ang_vel_z']] = ang_vel
     sequence_data_with_ang_vel['ang_dist'] = ang_dist
+
+    subject = sequence_data['subject'].iloc[0]
+    handedness = demographics[demographics['subject'] == subject]['handedness'].iloc[0] ## (0): left, (1): right
+    if handedness == 0:
+        sequence_data_with_ang_vel['rotvec_x'] = - sequence_data_with_ang_vel['rotvec_x'] #+ (-0.8526133780336856 + 0.3518238644621146)
+        sequence_data_with_ang_vel['ang_vel_y'] = - sequence_data_with_ang_vel['ang_vel_y'] #+ (-0.8526133780336856 + 0.3518238644621146)
+        sequence_data_with_ang_vel['ang_vel_z'] = - sequence_data_with_ang_vel['ang_vel_z'] #+ (-0.8526133780336856 + 0.3518238644621146)
 
     return sequence_data_with_ang_vel
 
@@ -652,7 +665,7 @@ def add_gesture_phase(sequence_data):
     sequence_data_phase['phase_adj'] = phase
     return sequence_data_phase
 
-def manage_tof(sequence_data):
+def manage_tof(sequence_data, demographics):
     sequence_data_tof = sequence_data.copy()
     #tof_col = []
     for i in range(1, 6):
@@ -662,6 +675,27 @@ def manage_tof(sequence_data):
         sequence_data_tof[f'tof_{i}_std'] = sequence_data[pixel_cols].std(axis = 1)
         sequence_data_tof[f'tof_{i}_min'] = tof_data.min(axis = 1)
         sequence_data_tof[f'tof_{i}_max'] = tof_data.max(axis = 1)
+
+    subject = sequence_data['subject'].iloc[0]
+    handedness = demographics[demographics['subject'] == subject]['handedness'].iloc[0] ## (0): left, (1): right
+    if handedness == 0:
+        cols_tof_3 = [col for col in sequence_data.columns if 'tof_3' in col]
+        cols_thm_3 = [col for col in sequence_data.columns if 'thm_3' in col]
+        cols_tof_5 = [col for col in sequence_data.columns if 'tof_5' in col]
+        cols_thm_5 = [col for col in sequence_data.columns if 'thm_5' in col]
+        rename_dict = {}
+        # TOF3 <-> TOF5
+        for c3, c5 in zip(cols_tof_3, cols_tof_5):
+            rename_dict[c3] = c5
+            rename_dict[c5] = c3
+
+        # THM3 <-> THM5
+        for c3, c5 in zip(cols_thm_3, cols_thm_5):
+            rename_dict[c3] = c5
+            rename_dict[c5] = c3
+
+        sequence_data_tof.rename(columns=rename_dict, inplace=True)
+
     return sequence_data_tof
 
 # def add_correlations_tof_imu(sequence_data):
@@ -695,6 +729,7 @@ def split_into_transition_and_gesture_phases(sequence_data, meta_cols):
 def wrapper_data( TRAIN = True, split = False):
     if TRAIN:
         train_df = pd.read_csv(Config.TRAIN_PATH)
+        train_demographics = pd.read_csv(Config.TRAIN_DEMOGRAPHICS_PATH)
 
         label_encoder = LabelEncoder()
         train_df['gesture_id'] = label_encoder.fit_transform(train_df['gesture'].astype(str))
@@ -762,13 +797,12 @@ def wrapper_data( TRAIN = True, split = False):
         for _, data_sequence in tqdm(train_sequences, desc="Processing Sequences"):
             data_sequence = data_sequence.reset_index(drop=True)
             data_sequence = add_gesture_phase(data_sequence)
-            data_sequence = compute_acceleration_features(data_sequence)
-            data_sequence = compute_angular_features(data_sequence)
-            data_sequence = sliding_window_freq_features(data_sequence)
+            data_sequence = compute_acceleration_features(data_sequence, train_demographics)
+            data_sequence = compute_angular_features(data_sequence, train_demographics)
             #data_sequence = compute_fft_features(data_sequence)
             #data_sequence = compute_theta_phi_features(data_sequence)
             #data_sequence = compute_corr_and_svd_features(data_sequence)
-            data_sequence = manage_tof(data_sequence)
+            data_sequence = manage_tof(data_sequence, train_demographics)
 
             if split:
                 data_sequence = split_into_transition_and_gesture_phases(data_sequence, meta_cols)

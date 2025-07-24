@@ -767,6 +767,50 @@ class DeviceRotationAugment:
 
         return x_copy
     
+    def apply_specific_rotation( 
+                       x, 
+                       ax: str, 
+                       rots,
+                       selected_features,
+                       features_to_rotate) -> np.ndarray:
+        x_copy = x.numpy().copy()
+        rot_x, rot_y, rot_z = rots
+        if ax == 'x':
+            rot = R.from_euler(ax, rot_x, degrees=True)
+        if ax == 'y':
+            rot = R.from_euler(ax, rot_y, degrees=True)
+        if ax == 'z':
+            rot = R.from_euler(ax, rot_z, degrees=True)
+        if ax == 'zx':
+            rot = R.from_euler('z', rot_z, degrees=True) *  R.from_euler('x', rot_x, degrees=True)
+        if ax == 'xz':
+            rot = R.from_euler('x', rot_x, degrees=True) *  R.from_euler('z', rot_z, degrees=True)
+        if ax == 'zy':
+            rot = R.from_euler('z', rot_z, degrees=True) *  R.from_euler('y', rot_y, degrees=True)
+        if ax == 'xy':
+            rot = R.from_euler('x', rot_x, degrees=True) *  R.from_euler('y', rot_y, degrees=True)
+        if ax == 'zxy':
+            rot = R.from_euler('z', rot_z, degrees=True) * R.from_euler('x', rot_x, degrees=True) *  R.from_euler('y', rot_y, degrees=True)
+
+        for feats in features_to_rotate:
+            idx_rotate = np.where(np.isin(selected_features, feats))[0]
+            if len(idx_rotate) == 0:
+                continue
+
+            if not any('rot_' in f for f in feats):
+                rotated = rot.apply(x_copy[:, idx_rotate])
+                x_copy[:, idx_rotate] = rotated
+            else:
+                init_quat = x_copy[:, idx_rotate]
+                mask = np.linalg.norm(init_quat, axis=1) < 1e-6
+                R_orig = R.from_quat(init_quat[~mask])
+                R_new = rot * R_orig
+                new_quat = np.zeros_like(init_quat)
+                new_quat[~mask] = R_new.as_quat()
+                x_copy[:, idx_rotate] = new_quat
+
+        return x_copy
+    
     # ---------- master call ----------
     def __call__(self,
                  axes: list) -> np.ndarray:

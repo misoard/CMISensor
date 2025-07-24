@@ -17,7 +17,7 @@ from datetime import datetime
 
 
 TRAIN = True
-N_TRIAL = 18
+N_TRIAL = 52
 
 N_SPLITS = 5
 BATCH_SIZE = 64
@@ -29,12 +29,12 @@ LR = 1e-3
 
 normalisation_TOF_RAW = False
 normalisation_TOF_THM = True
-attention_for_fusion = True
-attention_pooled = True
-C_TOF_RAW = False
+attention_for_fusion = False
+attention_pooled = False
+C_TOF_RAW = True
 ADD_TOF_TO_THM = True
 
-GAMMA = 0.2
+GAMMA = 0.
 LAMB = 0.
 L_IMU = 0.2
 
@@ -42,7 +42,7 @@ L_IMU = 0.2
 SEED = Config.SEED
 reset_seed(SEED)
 
-file_path_train = os.path.join(Config.EXPORT_DIR, "train_torch_tensors_from_wrapper_not_split.pt")
+file_path_train = os.path.join(Config.EXPORT_DIR, "train_torch_tensors_from_wrapper_left_corrected.pt")
 file_path_cols = os.path.join(Config.EXPORT_DIR, "cols.pkl")
 file_path_splits = os.path.join(Config.EXPORT_DIR, "split_ids.pkl")
 
@@ -207,6 +207,10 @@ all_parameters = {
 
 }
 
+# ------------------------------- DEMO DATA ---------------------------------
+ 
+train_demographics = pd.read_csv(Config.TRAIN_DEMOGRAPHICS_PATH)
+
 
 # ------------------------------- TRAINING ---------------------------------
 
@@ -217,6 +221,7 @@ if not ADD_TOF_TO_THM:
 
 train_ids = np.array(split_ids['train']['train_sequence_ids']) #seq_id of data sequences 
 groups = [split_ids['train']['train_sequence_subject'][seq_id] for seq_id in train_ids] #subject_id of data_sequences
+wrong_subjects = ['SUBJ_045235', 'SUBJ_019262']
 
 # idx_spe_seq = np.where(train_ids == 'SEQ_000007')[0]
 
@@ -240,6 +245,17 @@ for fold, (train_idx, val_idx) in enumerate(sgkf.split(X, y, groups)):
 
         subjects_id = np.array(groups)[train_idx]
         train_seq_ids = train_ids[train_idx]
+
+        ###### Handedness of subjects in train and validation fold
+        subjects_fold_train = np.unique(subjects_id)
+        subjects_fold_val= np.unique(np.array(groups)[val_idx])
+        handedness_train = [train_demographics[train_demographics['subject'] == subject]['handedness'].iloc[0] for subject in subjects_fold_train]
+        handedness_val = [train_demographics[train_demographics['subject'] == subject]['handedness'].iloc[0] for subject in subjects_fold_val]
+        print(f"number of left-handed (right-handed) subject in train fold {fold + 1} = {np.sum(np.array(handedness_train) == 0)} ({np.sum(np.array(handedness_train) == 1)})")
+        print(f"number of left-handed (right-handed) subject in val fold {fold + 1} = {np.sum(np.array(handedness_val) == 0)} ({np.sum(np.array(handedness_val) == 1)})")
+        cond_wrong = [wg_sub in subjects_fold_val for wg_sub in wrong_subjects]
+        if any(cond_wrong):
+            print(f"wrong wrist wearing detected in val fold {fold + 1}: {np.array(wrong_subjects)[cond_wrong]}")
 
         print(" ---- check for reproductibility ----")
         print(f"first 10 seq_id = {train_seq_ids[:10]}")
