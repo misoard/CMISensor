@@ -800,7 +800,7 @@ def wrapper_data( TRAIN = True, split = False):
             data_sequence = compute_acceleration_features(data_sequence, train_demographics)
             data_sequence = compute_angular_features(data_sequence, train_demographics)
             #data_sequence = compute_fft_features(data_sequence)
-            #data_sequence = compute_theta_phi_features(data_sequence)
+            #data_sequence = compute_theta_phi_features(data_sequence) 
             #data_sequence = compute_corr_and_svd_features(data_sequence)
             data_sequence = manage_tof(data_sequence, train_demographics)
 
