@@ -39,7 +39,6 @@ def train_model(model,
     best_score = 0
     best_score_imu_only = 0
     best_score_imu_tof_thm = 0
-    i_scheduler = 0
     for epoch in range(1, epochs + 1):
         #check_memory()
         model.train()
@@ -71,10 +70,6 @@ def train_model(model,
             loss += L_IMU * imu_loss
             loss.backward()
             optimizer.step()
-            
-            if scheduler is not None:
-                scheduler.step(i_scheduler)
-                i_scheduler +=1
 
             train_loss += loss.item()
             train_preds.extend(outputs.argmax(1).cpu().numpy())
@@ -139,6 +134,8 @@ def train_model(model,
                 
         val_acc, _, val_macro_f1 = competition_metric(val_targets['out'], val_preds['out'])     #accuracy_score(val_targets, val_preds)
         early_stopper(val_acc, model)
+        if scheduler is not None:
+            scheduler.step(val_acc)
 
         #val_binary_recall = recall_score(bin_targets, bin_preds)
         if early_stopper.best_score > best_score:

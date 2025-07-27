@@ -918,11 +918,15 @@ class Augment:
         x = self.sensor_dropout(x, imu_dim)
         return x
     
-
 class EnsemblePredictor:
-    def __init__(self,  processing_dir, models_dir, device):
+    def __init__(self,  processing_dir, models_dir, device, params):
         self.device = device
-        self.models = []
+        self.models = {
+            'hybrid_models': [],
+            'imu_only_models': [],
+            'imu_tof_thm_models': []
+            }
+        self.params = params
         self.scaler = None
         self.features = None
         self.label_encoder = None
@@ -933,18 +937,34 @@ class EnsemblePredictor:
         self._load_processing(processing_dir)
 
     def _load_models(self, models_dir):
-        model_files = sorted(glob.glob(f"{models_dir}/best_model_fold_*.pth"))
-        print(f"{len(model_files)} models have been found")
+        model_files = {}
+        model_files['hybrid_models'] = sorted(glob.glob(f"{models_dir}/best_model_fold_*.pth"))
+        model_files['imu_only_models'] = sorted(glob.glob(f"{models_dir}/best_model_imu_only_fold_*.pth"))
+        model_files['imu_tof_thm_models'] = sorted(glob.glob(f"{models_dir}/best_model_imu_tof_thm_fold_*.pth"))
         
-        for model_file in model_files:
-            checkpoint = torch.load(model_file, map_location=self.device, weights_only=True)
-            
-            model = MiniGestureClassifier(imu_dim=14, hidden_dim=128, num_classes=18)
-            
-            model.load_state_dict(checkpoint) #['model_state_dict']
-            model.to(self.device)
-            model.eval()
-            self.models.append(model)
+        for key, models in model_files.items():
+            print(f"{len(models)} {' '.join(key.split('_'))} have been found")
+        
+        for key, models in model_files.items():
+            for model_file in models:
+                checkpoint = torch.load(model_file, map_location=self.device, weights_only=True)
+                
+                #model = MiniGestureClassifier(imu_dim=14, hidden_dim=128, num_classes=18)
+                model = GlobalGestureClassifier(imu_dim=self.params['imu_dim'], 
+                                                thm_tof_dim=self.params['thm_tof_dim'], 
+                                                tof_raw_dim=self.params['tof_raw_dim'],  
+                                                hidden_dim=self.params['HIDDEN_DIM'], 
+                                                num_classes=self.params['N_CLASSES'], 
+                                                C_TOF_RAW=self.params['C_TOF_RAW'],
+                                                norm_TOF_RAW=self.params['normalisation_TOF_RAW'],
+                                                norm_TOF_THM=self.params['normalisation_TOF_THM'],
+                                                attention_for_fusion=self.params['attention_for_fusion'],
+                                                attention_pooled= self.params['attention_pooled']
+                                            ) # MODEL            
+                model.load_state_dict(checkpoint) #['model_state_dict']
+                model.to(self.device)
+                model.eval()
+                self.models[key].append(model)
 
     def _load_processing(self, processing_dir):
         self.scaler = joblib.load(os.path.join(processing_dir, "scaler.pkl"))
@@ -961,18 +981,18 @@ class EnsemblePredictor:
         print("-> scaler, features, labels classes loaded")
         #print(f"features = {self.features}")
     
-    def features_eng(self, df_seq: pd.DataFrame):
+    def features_eng(self, df_seq: pd.DataFrame, demographics: pd.DataFrame):
         df_seq = regularize_quaternions_per_sequence(df_seq)
 
         ### -- ADD NEW FEATURES (IMU + AVERAGED TOF COLUMNS) --- 
         df_seq = df_seq.reset_index(drop=True)
         df_seq = add_gesture_phase(df_seq)
-        df_seq = compute_acceleration_features(df_seq)
-        df_seq = compute_angular_features(df_seq)
-        df_seq = manage_tof(df_seq)
+        df_seq = compute_acceleration_features(df_seq, demographics)
+        df_seq = compute_angular_features(df_seq, demographics)
+        df_seq = manage_tof(df_seq, demographics)
         return df_seq
-    
-    def scale_pad_and_transform_to_torch_sequence(self, df_seq, pad_length, is_imu_only = True):
+
+    def scale_pad_and_transform_to_torch_sequence(self, df_seq, pad_length, is_imu_only = False):
         ### -- Columns re-ordering to match train order
         df_seq_features = df_seq[self.features].copy()
 
@@ -991,17 +1011,35 @@ class EnsemblePredictor:
         idx_to_scale = np.where(np.isin(self.features, features_to_scale))[0]
         if len(np_seq_features) > 0:
             np_seq_features[:, idx_to_scale] =  self.scaler.transform(np_seq_features[:, idx_to_scale])
-
-        if is_imu_only:
-            imu_features = [
+        
+        imu_features = [
             'acc_x','acc_y','acc_z', 'rotvec_x', 'rotvec_y', 'rotvec_z', 
             'linear_acc_x', 'linear_acc_y', 'linear_acc_z', 
             'ang_vel_x', 'ang_vel_y', 'ang_vel_z', 'ang_dist',
             'phase_adj'
             ] 
+
+        if is_imu_only:
             idx_imu = [np.where(self.features == f)[0][0] for f in imu_features]    ### select features from selected_features above
             np_seq_features = np_seq_features[:, idx_imu]
+        else:
+            raw_tof = [f for f in self.cols['tof'] if 'v' in f]
+            selected_tof = [f for f in self.cols['tof'] if 'v' not in f]
 
+            raw_tof_sorted = np.array([f'tof_{i}_v{j}' for i in range(1, 6) for j in range(64)])
+            check_all_pixels = np.array([f in raw_tof for f in raw_tof_sorted]   )            ### THM Features for later
+
+            if not np.all(check_all_pixels):
+                print(f"missing pixel raw data in TOF data: {np.array(raw_tof_sorted)[~check_all_pixels]}")
+            
+            raw_tof_sorted = list(raw_tof_sorted[check_all_pixels])
+            idx_imu = [np.where(self.features == f)[0][0] for f in imu_features]    ### select features from selected_features above
+            idx_tof = [np.where(self.features == f)[0][0] for f in selected_tof]                   ### TOF Features for later
+            idx_raw_tof = [np.where(self.features == f)[0][0] for f in raw_tof_sorted]                   ### TOF Features for later
+            idx_thm = [np.where(self.features == f)[0][0] for f in self.cols['thm']]               ### THM Features for later
+            
+            idx_all = idx_imu + idx_thm + idx_tof + idx_raw_tof
+            np_seq_features = np_seq_features[:, idx_all]
 
         seq = torch.tensor(np_seq_features, dtype=torch.float32)
         length = seq.size(0)
@@ -1016,31 +1054,59 @@ class EnsemblePredictor:
 
         #print(f"sequence has been scaled and padded. shape (1, T, F): {seq.shape}")
         return seq.to(self.device)
-    
+
     def predict(self, torch_seq, by_fold = None):
     # torch_seq: [N, ...]  (N = batch size)
 
         if by_fold is None:
-            pred_by_model = []
-    
-            for model in self.models:
-                model.eval()
-                with torch.no_grad():
-                    output = model(torch_seq)  # [N, num_classes]
-                    preds = output.argmax(1).cpu().numpy()  # shape: [N]
-                    pred_by_model.append(preds)  # list of arrays
-        
-            # Transpose to get predictions per sample:
-            # pred_by_model: list of model predictions → shape: [num_models, N]
-            # after zip(*...), we get: [ [model1_pred_sample1, model2_pred_sample1, ...], ... ]
-            pred_by_model = list(zip(*pred_by_model))  # shape: [N, num_models]
-        
-            final_preds = []
-            for sample_preds in pred_by_model:
-                most_common_prediction = Counter(sample_preds).most_common(1)[0][0]
-                final_preds.append(str(self.map_classes[most_common_prediction]))
+            pred_by_model = {
+                'hybrid_models': [], 
+                'imu_only_models': [], 
+                'imu_tof_thm_models': []
+                }
+            
+            weights = {
+                'hybrid_models': 0.44,
+                'imu_only_models': 0.33,
+                'imu_tof_thm_models': 0.22
+            }
+
+            for key, models in self.models.items():
+                for model in models:
+                    model.eval()
+                    with torch.no_grad():
+                        output = model(torch_seq)  # [N, num_classes]
+                        probs = F.softmax(output, dim=1).cpu().numpy()  # [N, num_classes]
+                        pred_by_model[key].append(probs)
+
+            # Merge predictions
+            N, num_classes = pred_by_model['hybrid_models'][0].shape
+            merged_probs = np.zeros((N, num_classes))
+
+            for key, pred_list in pred_by_model.items():
+                if not pred_list:
+                    continue
+                stacked = np.stack(pred_list, axis=0)  # [num_models, N, num_classes]
+                avg_probs = np.mean(stacked, axis=0)   # [N, num_classes]
+                merged_probs += weights[key] * avg_probs
+
+            # Final prediction by argmax
+            preds = merged_probs.argmax(axis=1)
+            final_preds = [str(self.map_classes[pred]) for pred in preds]  # [N]
+
+            #     for model in models:
+            #         model.eval()
+            #         with torch.no_grad():
+            #             output = model(torch_seq)  # [N, num_classes]
+            #             preds = output.argmax(1).cpu().numpy()  # shape: [N]
+            #             pred_by_model[key].append(preds)  # list of arrays
+            # pred_by_model = list(zip(*pred_by_model))  # shape: [N, num_models]
+            # final_preds = []
+            # for sample_preds in pred_by_model:
+            #     most_common_prediction = Counter(sample_preds).most_common(1)[0][0]
+            #     final_preds.append(str(self.map_classes[most_common_prediction]))
         else:
-            model = self.models[by_fold]
+            model = self.models['hybrid'][by_fold]
             model.eval()
             with torch.no_grad():
                 output = model(torch_seq)  # [N, num_classes]
@@ -1051,3 +1117,140 @@ class EnsemblePredictor:
             return final_preds[0]
         else:
             return final_preds  # length N list of mapped predictions
+
+
+
+        
+
+# class EnsemblePredictor:
+#     def __init__(self,  processing_dir, models_dir, device):
+#         self.device = device
+#         self.models = []
+#         self.scaler = None
+#         self.features = None
+#         self.label_encoder = None
+#         self.map_classes = None
+#         self.inverse_map_classes = None
+#         self.cols = None
+#         self._load_models(models_dir)
+#         self._load_processing(processing_dir)
+
+#     def _load_models(self, models_dir):
+#         model_files = sorted(glob.glob(f"{models_dir}/best_model_fold_*.pth"))
+#         print(f"{len(model_files)} models have been found")
+        
+#         for model_file in model_files:
+#             checkpoint = torch.load(model_file, map_location=self.device, weights_only=True)
+            
+#             model = MiniGestureClassifier(imu_dim=14, hidden_dim=128, num_classes=18)
+
+#             model.load_state_dict(checkpoint) #['model_state_dict']
+#             model.to(self.device)
+#             model.eval()
+#             self.models.append(model)
+
+#     def _load_processing(self, processing_dir):
+#         self.scaler = joblib.load(os.path.join(processing_dir, "scaler.pkl"))
+#         self.label_encoder = joblib.load(os.path.join(processing_dir, "label_encoder.pkl"))
+#         self.map_classes = {idx: cl for idx, cl in enumerate(self.label_encoder.classes_)}
+#         self.inverse_map_classes = {cl: idx for idx, cl in enumerate(self.label_encoder.classes_)}
+
+        
+#         file_path_cols = os.path.join(processing_dir, "cols.pkl")
+#         with open(file_path_cols, 'rb') as f:
+#             self.cols = pickle.load(f)
+#         self.features = np.concatenate( (self.cols['imu'], self.cols['thm'], self.cols['tof']) ) 
+
+#         print("-> scaler, features, labels classes loaded")
+#         #print(f"features = {self.features}")
+    
+#     def features_eng(self, df_seq: pd.DataFrame):
+#         df_seq = regularize_quaternions_per_sequence(df_seq)
+
+#         ### -- ADD NEW FEATURES (IMU + AVERAGED TOF COLUMNS) --- 
+#         df_seq = df_seq.reset_index(drop=True)
+#         df_seq = add_gesture_phase(df_seq)
+#         df_seq = compute_acceleration_features(df_seq)
+#         df_seq = compute_angular_features(df_seq)
+#         df_seq = manage_tof(df_seq)
+#         return df_seq
+    
+#     def scale_pad_and_transform_to_torch_sequence(self, df_seq, pad_length, is_imu_only = True):
+#         ### -- Columns re-ordering to match train order
+#         df_seq_features = df_seq[self.features].copy()
+
+#         #has_nan_tof_thm = df_seq_features[ np.concatenate( (self.cols['tof'], self.cols['thm']) ) ].isnull().all(axis=1).all()
+#         # if has_nan_tof_thm:
+#         #     print("NaN values have been found in TOF and/or THM data")
+        
+#         has_nan_imu = df_seq_features[self.cols['imu']].isnull().any().any()
+#         if has_nan_imu:
+#             print("x IMU cols have NaN values. Shouldn't be the case! Check data!")
+
+#         ### -- Scale features and check NaN for IMU COLS  
+#         np_seq_features  =  df_seq_features.to_numpy()
+#         features_to_exclude = [f for f in self.features if any(substr in f for substr in ['phase_adj'])]
+#         features_to_scale = [f for f in self.features if f not in features_to_exclude]
+#         idx_to_scale = np.where(np.isin(self.features, features_to_scale))[0]
+#         if len(np_seq_features) > 0:
+#             np_seq_features[:, idx_to_scale] =  self.scaler.transform(np_seq_features[:, idx_to_scale])
+
+#         if is_imu_only:
+#             imu_features = [
+#             'acc_x','acc_y','acc_z', 'rotvec_x', 'rotvec_y', 'rotvec_z', 
+#             'linear_acc_x', 'linear_acc_y', 'linear_acc_z', 
+#             'ang_vel_x', 'ang_vel_y', 'ang_vel_z', 'ang_dist',
+#             'phase_adj'
+#             ] 
+#             idx_imu = [np.where(self.features == f)[0][0] for f in imu_features]    ### select features from selected_features above
+#             np_seq_features = np_seq_features[:, idx_imu]
+
+
+#         seq = torch.tensor(np_seq_features, dtype=torch.float32)
+#         length = seq.size(0)
+#         # Truncate
+#         if length >= pad_length:
+#             seq = seq[:pad_length].unsqueeze(0)
+#         # Pad
+#         elif length < pad_length:
+#             pad_len = pad_length - length
+#             padding = torch.full((pad_len, *seq.shape[1:]), 0.0, dtype=torch.float32)
+#             seq = torch.cat([seq, padding], dim=0).unsqueeze(0)
+
+#         #print(f"sequence has been scaled and padded. shape (1, T, F): {seq.shape}")
+#         return seq.to(self.device)
+    
+#     def predict(self, torch_seq, by_fold = None):
+#     # torch_seq: [N, ...]  (N = batch size)
+
+#         if by_fold is None:
+#             pred_by_model = []
+    
+#             for model in self.models:
+#                 model.eval()
+#                 with torch.no_grad():
+#                     output = model(torch_seq)  # [N, num_classes]
+#                     preds = output.argmax(1).cpu().numpy()  # shape: [N]
+#                     pred_by_model.append(preds)  # list of arrays
+        
+#             # Transpose to get predictions per sample:
+#             # pred_by_model: list of model predictions → shape: [num_models, N]
+#             # after zip(*...), we get: [ [model1_pred_sample1, model2_pred_sample1, ...], ... ]
+#             pred_by_model = list(zip(*pred_by_model))  # shape: [N, num_models]
+        
+#             final_preds = []
+#             for sample_preds in pred_by_model:
+#                 most_common_prediction = Counter(sample_preds).most_common(1)[0][0]
+#                 final_preds.append(str(self.map_classes[most_common_prediction]))
+#         else:
+#             model = self.models[by_fold]
+#             model.eval()
+#             with torch.no_grad():
+#                 output = model(torch_seq)  # [N, num_classes]
+#                 preds = output.argmax(1).cpu().numpy()  # shape: [N]
+#             final_preds = [str(self.map_classes[pred]) for pred in preds]
+        
+#         if len(final_preds) == 1:
+#             return final_preds[0]
+#         else:
+#             return final_preds  # length N list of mapped predictions

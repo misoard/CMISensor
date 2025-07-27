@@ -16,8 +16,20 @@ import sys
 from datetime import datetime
 
 
+file_path_trial = os.path.join(Config.EXPORT_DIR, 'number_trials.txt')
+with open(file_path_trial, 'r') as f:
+    trial = f.read()
+
+last_trial = int(trial)
+current_trial = last_trial + 1
+
+with open(file_path_trial, 'w') as f:
+    f.write(str(current_trial))
+
 TRAIN = True
-N_TRIAL = 52
+N_TRIAL = current_trial
+
+print(f"=============== TRIAL {N_TRIAL} ===============")
 
 N_SPLITS = 5
 BATCH_SIZE = 64
@@ -30,8 +42,8 @@ LR = 1e-3
 normalisation_TOF_RAW = False
 normalisation_TOF_THM = True
 attention_for_fusion = False
-attention_pooled = False
-C_TOF_RAW = True
+attention_pooled = True
+C_TOF_RAW = False
 ADD_TOF_TO_THM = True
 
 GAMMA = 0.
@@ -42,7 +54,7 @@ L_IMU = 0.2
 SEED = Config.SEED
 reset_seed(SEED)
 
-file_path_train = os.path.join(Config.EXPORT_DIR, "train_torch_tensors_from_wrapper_left_corrected.pt")
+file_path_train = os.path.join(Config.EXPORT_DIR, "train_torch_tensors_from_wrapper_left_corrected_without_TOF_correction.pt")
 file_path_cols = os.path.join(Config.EXPORT_DIR, "cols.pkl")
 file_path_splits = os.path.join(Config.EXPORT_DIR, "split_ids.pkl")
 
@@ -204,6 +216,11 @@ all_parameters = {
     "loss_GAMMA": GAMMA,
     "loss_LAMBDA": LAMB,
     "additionnal_IMU_loss": L_IMU,
+    "N_CLASSES": len(class_weight),
+    "imu_dim":len(selected_features),
+    "thm_tof_dim":len(selected_tof),
+    "tof_raw_dim":len(raw_tof_sorted),
+
 
 }
 
@@ -355,6 +372,7 @@ for fold, (train_idx, val_idx) in enumerate(sgkf.split(X, y, groups)):
 
 
         optimizer = optim.Adam(model.parameters(), lr=LR) # OPTIMIZER  weight_decay=WD
+        #scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=5, verbose=True)
 
         best_score, best_score_imu_only, best_score_imu_tof_thm = train_model(model, train_loader, val_loader, 
                                  optimizer, criterion, 
@@ -363,6 +381,7 @@ for fold, (train_idx, val_idx) in enumerate(sgkf.split(X, y, groups)):
                                  patience=PATIENCE, 
                                  fold = fold, 
                                  split_indices = indices_branches,
+                                 scheduler=None,
                                  L_IMU= L_IMU
                                  )
         best_scores['mixture'].append(best_score)
@@ -372,7 +391,7 @@ for fold, (train_idx, val_idx) in enumerate(sgkf.split(X, y, groups)):
         print("---- INFERENCE MODE ----")
         processing_dir = Config.EXPORT_DIR
         models_dir = Config.EXPORT_MODELS_PATH
-        predictor = EnsemblePredictor(processing_dir, models_dir, DEVICE)
+        predictor = EnsemblePredictor(processing_dir, models_dir, DEVICE, all_parameters)
         inverse_map_classes = predictor.inverse_map_classes
         #map_classes = predictor.map_classes
         

@@ -74,7 +74,8 @@ class Config:
     SEED = 42
     N_FOLDS = 5
     PERCENTILE = 95
-    
+    PADDING = 127
+
     # Feature columns
     ACC_COLS = ['acc_x', 'acc_y', 'acc_z']
     ROT_COLS = ['rot_w', 'rot_x', 'rot_y', 'rot_z']
@@ -678,7 +679,7 @@ def manage_tof(sequence_data, demographics):
 
     subject = sequence_data['subject'].iloc[0]
     handedness = demographics[demographics['subject'] == subject]['handedness'].iloc[0] ## (0): left, (1): right
-    if handedness == 0:
+    if handedness == 2:
         cols_tof_3 = [col for col in sequence_data.columns if 'tof_3' in col]
         cols_thm_3 = [col for col in sequence_data.columns if 'thm_3' in col]
         cols_tof_5 = [col for col in sequence_data.columns if 'tof_5' in col]
