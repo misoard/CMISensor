@@ -39,16 +39,25 @@ PATIENCE = 45
 ALPHA = 0.4
 LR = 1e-3
 
+p_dropout = 0.5 #0.42
+p_jitter= 0.98
+p_moda = 0.39
+p_rotation = 1.1
+small_rotation = 2.
+x_max_angle = 30.
+
+
 normalisation_TOF_RAW = False
 normalisation_TOF_THM = True
 attention_for_fusion = False
 attention_pooled = True
 C_TOF_RAW = False
 ADD_TOF_TO_THM = True
+SCHEDULER = True
 
 GAMMA = 0.
 LAMB = 0.
-L_IMU = 0.2
+L_IMU = 0.25
 
 
 SEED = Config.SEED
@@ -220,8 +229,13 @@ all_parameters = {
     "imu_dim":len(selected_features),
     "thm_tof_dim":len(selected_tof),
     "tof_raw_dim":len(raw_tof_sorted),
-
-
+    "scheduler": SCHEDULER,
+    "p_dropout": p_dropout,
+    "p_jitter": p_jitter,
+    "p_moda": p_moda,
+    "p_rotation": p_rotation,
+    "small_rotation": small_rotation, 
+    "x_max_angle": x_max_angle,
 }
 
 # ------------------------------- DEMO DATA ---------------------------------
@@ -291,9 +305,9 @@ for fold, (train_idx, val_idx) in enumerate(sgkf.split(X, y, groups)):
         print("------ DATA AUGMENTATION: DEVICE ROTATION ------")
         rotation_augmented = DeviceRotationAugment(X_tr, y_tr, train_seq_ids,     
                             seqs_by_subject, selected_features, 
-                            p_rotation=1.1, 
-                            small_rotation=2., 
-                            x_rot_range=(0., 30.)
+                            p_rotation=p_rotation, 
+                            small_rotation=small_rotation, 
+                            x_rot_range=(0., x_max_angle)
                             )
         X_tr, y_tr, count = rotation_augmented(axes=['z', 'x'])
         print(f"number of additional rotated features samples: {count}")
@@ -307,9 +321,9 @@ for fold, (train_idx, val_idx) in enumerate(sgkf.split(X, y, groups)):
         #     p_moda=0.39, drift_std=0.004, drift_max=0.39    
         # )
         augmenter = Augment(
-            p_jitter=0.98, sigma=0.033, scale_range=(0.75,1.16),
-            p_dropout=0.42,
-            p_moda=0.39, drift_std=0.004, drift_max=0.39    
+            p_jitter=p_jitter, sigma=0.033, scale_range=(0.75,1.16),
+            p_dropout=p_dropout,
+            p_moda=p_moda, drift_std=0.004, drift_max=0.39    
         )
         #########################################
 
@@ -372,7 +386,10 @@ for fold, (train_idx, val_idx) in enumerate(sgkf.split(X, y, groups)):
 
 
         optimizer = optim.Adam(model.parameters(), lr=LR) # OPTIMIZER  weight_decay=WD
-        #scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=5, verbose=True)
+        if SCHEDULER:
+            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.6, patience=8, verbose=True)
+        else:
+            scheduler = None
 
         best_score, best_score_imu_only, best_score_imu_tof_thm = train_model(model, train_loader, val_loader, 
                                  optimizer, criterion, 
@@ -381,7 +398,7 @@ for fold, (train_idx, val_idx) in enumerate(sgkf.split(X, y, groups)):
                                  patience=PATIENCE, 
                                  fold = fold, 
                                  split_indices = indices_branches,
-                                 scheduler=None,
+                                 scheduler=scheduler,
                                  L_IMU= L_IMU
                                  )
         best_scores['mixture'].append(best_score)

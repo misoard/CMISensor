@@ -282,6 +282,43 @@ class TOFEncoder(nn.Module):
         return tof_raw_feat.permute(0, 2, 1) # [B, hidden_dim, T]  
 
 
+class TOFEncoderTemporalBeforePool(nn.Module):
+    def __init__(self, hidden_dim, C, H, W):
+        super().__init__()
+
+        self.C = C
+        self.H = H
+        self.W = W
+
+        self.temporal_attn = nn.Sequential(
+            nn.Conv2d(C, 1, kernel_size=1),  # [B*T, 1, H, W]
+            nn.Sigmoid()
+        )
+
+        self.spatial_pool = nn.AdaptiveAvgPool2d(1)
+
+        self.tof_post = nn.Sequential(
+            nn.Linear(C, hidden_dim),
+            nn.ReLU()
+        )
+
+    def forward(self, tof_raw):
+        B, T, _ = tof_raw.shape
+        tof_raw = tof_raw.view(B, T, self.C, self.H, self.W)  # [B, T, C, H, W]
+        tof_raw_2d = tof_raw.view(B*T, self.C, self.H, self.W)  # Merge batch & time
+
+        # Compute per-frame spatial attention weights
+        attn_maps = self.temporal_attn(tof_raw_2d)  # [B*T, 1, H, W]
+        tof_weighted = tof_raw_2d * attn_maps  # Apply attention
+        tof_weighted = tof_weighted.view(B, T, self.C, self.H, self.W)
+
+        # Pool and project
+        pooled = self.spatial_pool(tof_weighted).squeeze(-1).squeeze(-1)  # [B, T, C]
+        tof_feat = self.tof_post(pooled)  # [B, T, hidden_dim]
+
+        return tof_feat.permute(0, 2, 1)  # [B, hidden_dim, T]
+
+
 class GatedFusion(nn.Module):
     def __init__(self, hidden_dim, num_modalities):
         super().__init__()
@@ -333,69 +370,7 @@ class AttentionFusion(nn.Module):
         fused = torch.einsum('btm,bmtc->btc', attn_weights, value_tensor)  # [B, T, hidden_dim]
         return fused.permute(0, 2, 1)  # back to [B, hidden_dim, T]
 
-
-
-class GestureClassifier(nn.Module):
-    def __init__(self, imu_dim, hidden_dim, num_classes, tof_dim = None, thm_dim = None): # tabular_dim = None
-        super().__init__()
-
-        if tof_dim is None:
-            tof_dim = imu_dim
-        if thm_dim is None:
-            thm_dim = imu_dim
-
-        self.imu_encoder = IMUEncoder(imu_dim, hidden_dim)
-        self.tof_encoder = OptionalEncoder(tof_dim, hidden_dim)
-        self.thm_encoder = OptionalEncoder(thm_dim, hidden_dim)
-        self.fusion = GatedFusion(hidden_dim, num_modalities=3)
-
-
-        self.classifier_rnn = nn.GRU(hidden_dim, hidden_dim, batch_first=True, bidirectional=True)
-        self.classifier_head = nn.Sequential(
-            nn.Linear(hidden_dim * 2 , hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(p = 0.3),
-            nn.Linear(hidden_dim, num_classes),
-            #nn.Softmax()
-        )
-
-    def forward(self, imu, thm=None, tof=None): #, tabular_feats=None
-        B, T, _ = imu.shape
-
-        imu_feat = self.imu_encoder(imu)  # [B, hidden_dim, T/4]
-
-        # nan_mask = torch.isnan(thm)
-        # nan_indices = torch.nonzero(nan_mask, as_tuple=True)[0].detach().cpu()
-        # print(f"number of NaN (detect possible FE errors): {len(np.unique(nan_indices.numpy()))}")
-
-        if tof is None:
-            tof = torch.zeros_like(imu)
-            tof_mask = torch.zeros(B, T, device=imu.device)
-        else:
-            tof_mask = (~torch.isnan(tof).any(dim=2)).float()
-
-        if thm is None:
-            thm = torch.zeros_like(imu)
-            thm_mask = torch.zeros(B, T, device=imu.device)
-        else:
-            thm_mask = (~torch.isnan(thm).any(dim=2)).float()
-
-        tof_feat = self.tof_encoder(tof, tof_mask)  # [B, hidden_dim, T/4]
-        thm_feat = self.thm_encoder(thm, thm_mask)  # [B, hidden_dim, T/4]
-
-        fused =  self.fusion([imu_feat, tof_feat, thm_feat])  # [B, hidden_dim, T/4]
-
-        fused_t = fused.permute(0, 2, 1)  # [B, T/4, hidden_dim]
-        rnn_out, _ = self.classifier_rnn(fused_t)  # [B, T/4, hidden_dim*2]
-
-        pooled = rnn_out.mean(dim=1)#   # [B, hidden_dim*2]
-        #pooled = F.dropout(pooled, p=0.5, training=self.training) 
-
-        out = self.classifier_head(pooled)  # [B, num_classes]
-
-        return out
     
-
 class GlobalGestureClassifier(nn.Module):
     def __init__(self, 
                  imu_dim, 
@@ -425,7 +400,8 @@ class GlobalGestureClassifier(nn.Module):
             self.attn_pool = AttentionPooling(hidden_dim)
 
         self.thm_tof_encoder = OptionalEncoder(thm_tof_dim, hidden_dim, norm=norm_TOF_THM)
-        self.tof_pixels = TOFEncoder(hidden_dim, C = 5, H = 8, W = 8, C_TOF_RAW=C_TOF_RAW, norm=norm_TOF_RAW)
+        #self.tof_pixels = TOFEncoder(hidden_dim, C = 5, H = 8, W = 8, C_TOF_RAW=C_TOF_RAW, norm=norm_TOF_RAW)
+        self.tof_pixels = TOFEncoderTemporalBeforePool(hidden_dim, C = 5, H = 8, W = 8)
 #         self.tof_spatial_weight = nn.Parameter(torch.ones(1, 1, 8, 8))  # Learnable
 #         self.spatial_pool = nn.AdaptiveAvgPool2d(1)  # or MaxPool2d or Flatten
 #         self.tof_post = nn.Sequential(
@@ -474,15 +450,15 @@ class GlobalGestureClassifier(nn.Module):
         else:
             tof_mask = torch.ones( B, T, device = thm_tof.device ) # (~torch.isnan(thm_tof).any(dim=2)).float() #(thm_tof != 0).float() #
 
-        if tof_raw is None:
-            tof_raw = torch.zeros_like(imu)
-            tof_raw_mask = torch.zeros(B, T, device=imu.device)
-        else:
-            tof_raw_mask = torch.ones( B, T, device = thm_tof.device )
+        # if tof_raw is None:
+        #     tof_raw = torch.zeros_like(imu)
+        #     tof_raw_mask = torch.zeros(B, T, device=imu.device)
+        # else:
+        #     tof_raw_mask = torch.ones( B, T, device = thm_tof.device )
 
 
         thm_tof_feat = self.thm_tof_encoder(thm_tof, tof_mask)  # [B, hidden_dim, T]
-        tof_raw_feat = self.tof_pixels(tof_raw, tof_raw_mask)
+        tof_raw_feat = self.tof_pixels(tof_raw) #, tof_raw_mask) # [B, hidden_dim, T]
 
         gated =  self.gated_fusion([imu_feat, thm_tof_feat, tof_raw_feat])  # [B, hidden_dim, T]
 
@@ -1254,3 +1230,64 @@ class EnsemblePredictor:
 #             return final_preds[0]
 #         else:
 #             return final_preds  # length N list of mapped predictions
+
+
+# class GestureClassifier(nn.Module):
+#     def __init__(self, imu_dim, hidden_dim, num_classes, tof_dim = None, thm_dim = None): # tabular_dim = None
+#         super().__init__()
+
+#         if tof_dim is None:
+#             tof_dim = imu_dim
+#         if thm_dim is None:
+#             thm_dim = imu_dim
+
+#         self.imu_encoder = IMUEncoder(imu_dim, hidden_dim)
+#         self.tof_encoder = OptionalEncoder(tof_dim, hidden_dim)
+#         self.thm_encoder = OptionalEncoder(thm_dim, hidden_dim)
+#         self.fusion = GatedFusion(hidden_dim, num_modalities=3)
+
+
+#         self.classifier_rnn = nn.GRU(hidden_dim, hidden_dim, batch_first=True, bidirectional=True)
+#         self.classifier_head = nn.Sequential(
+#             nn.Linear(hidden_dim * 2 , hidden_dim),
+#             nn.ReLU(),
+#             nn.Dropout(p = 0.3),
+#             nn.Linear(hidden_dim, num_classes),
+#             #nn.Softmax()
+#         )
+
+#     def forward(self, imu, thm=None, tof=None): #, tabular_feats=None
+#         B, T, _ = imu.shape
+
+#         imu_feat = self.imu_encoder(imu)  # [B, hidden_dim, T/4]
+
+#         # nan_mask = torch.isnan(thm)
+#         # nan_indices = torch.nonzero(nan_mask, as_tuple=True)[0].detach().cpu()
+#         # print(f"number of NaN (detect possible FE errors): {len(np.unique(nan_indices.numpy()))}")
+
+#         if tof is None:
+#             tof = torch.zeros_like(imu)
+#             tof_mask = torch.zeros(B, T, device=imu.device)
+#         else:
+#             tof_mask = (~torch.isnan(tof).any(dim=2)).float()
+
+#         if thm is None:
+#             thm = torch.zeros_like(imu)
+#             thm_mask = torch.zeros(B, T, device=imu.device)
+#         else:
+#             thm_mask = (~torch.isnan(thm).any(dim=2)).float()
+
+#         tof_feat = self.tof_encoder(tof, tof_mask)  # [B, hidden_dim, T/4]
+#         thm_feat = self.thm_encoder(thm, thm_mask)  # [B, hidden_dim, T/4]
+
+#         fused =  self.fusion([imu_feat, tof_feat, thm_feat])  # [B, hidden_dim, T/4]
+
+#         fused_t = fused.permute(0, 2, 1)  # [B, T/4, hidden_dim]
+#         rnn_out, _ = self.classifier_rnn(fused_t)  # [B, T/4, hidden_dim*2]
+
+#         pooled = rnn_out.mean(dim=1)#   # [B, hidden_dim*2]
+#         #pooled = F.dropout(pooled, p=0.5, training=self.training) 
+
+#         out = self.classifier_head(pooled)  # [B, num_classes]
+
+#         return out

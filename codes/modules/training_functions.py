@@ -46,7 +46,7 @@ def train_model(model,
         train_preds = []
         train_targets = []
 
-        for inputs, targets in train_loader:
+        for inputs, targets in tqdm(train_loader, f"Epoch {epoch}"):
 
             # if hide_val_half and split_indices is not None:
             #     half = batch_size // 2
@@ -90,10 +90,11 @@ def train_model(model,
             for inputs, targets in val_loader:
                 #check_memory()
                 if hide_val_half and split_indices is not None:
-                    half = min(batch_size // 2, inputs.shape[0] // 2)
+                    B = inputs.shape[0]
+                    half = B // 2
                     x_front = inputs[:half]               
                     x_back  = inputs[half:].clone()   
-                    x_back[:, :, idx_thm_tof] = 0.0    
+                    x_back[:, :, idx_thm_tof + list(split_indices['tof_raw'])] = 0.0    
                     inputs = torch.cat([x_front, x_back], dim=0)
                     x_back, x_front = x_back.to(device), x_front.to(device)
 

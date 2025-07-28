@@ -19,6 +19,8 @@ import inspect
 import psutil
 from scipy.signal import welch
 from scipy.stats import entropy
+from scipy.interpolate import griddata
+
 
 warnings.filterwarnings('ignore')
 
@@ -1061,3 +1063,15 @@ def check_memory():
     print(f"  Used      : {bytes_to_gb(mem.used)} GB")
     print(f"  Available : {bytes_to_gb(mem.available)} GB")
     print(f"  Percent   : {mem.percent}%")
+
+
+def interpolate_tof_frame(frame, mask):
+    """frame: [8,8], mask: bool mask of same shape"""
+    if mask.sum() < 3:
+        return frame  # not enough points to interpolate
+
+    coords = np.array(np.nonzero(mask)).T  # valid pixel coords
+    values = frame[mask]  # valid values
+    grid_x, grid_y = np.meshgrid(np.arange(8), np.arange(8))
+    interpolated = griddata(coords, values, (grid_y, grid_x), method='linear', fill_value=0)
+    return interpolated
