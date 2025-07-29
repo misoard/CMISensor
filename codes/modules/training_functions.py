@@ -94,7 +94,7 @@ def train_model(model,
                     half = B // 2
                     x_front = inputs[:half]               
                     x_back  = inputs[half:].clone()   
-                    x_back[:, :, idx_thm_tof + list(split_indices['tof_raw'])] = 0.0    
+                    x_back[:, :, len(split_indices['imu']):] = 0.0    
                     inputs = torch.cat([x_front, x_back], dim=0)
                     x_back, x_front = x_back.to(device), x_front.to(device)
 

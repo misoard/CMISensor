@@ -39,9 +39,9 @@ PATIENCE = 45
 ALPHA = 0.4
 LR = 1e-3
 
-p_dropout = 0.5 #0.42
-p_jitter= 0.98
-p_moda = 0.39
+p_dropout = 0.48 #0.42
+p_jitter= 0.0 #0.98
+p_moda = 0.0 #0.39
 p_rotation = 1.1
 small_rotation = 2.
 x_max_angle = 30.
@@ -55,8 +55,8 @@ C_TOF_RAW = False
 ADD_TOF_TO_THM = True
 SCHEDULER = True
 
-GAMMA = 0.
-LAMB = 0.
+GAMMA = 0.0
+LAMB = 0.0
 L_IMU = 0.25
 
 
