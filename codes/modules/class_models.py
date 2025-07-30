@@ -253,9 +253,9 @@ class TOFEncoder(nn.Module):
         else:
             self.tof_spatial_weight = nn.Parameter(torch.ones(1, 1, H, W))  # Learnable
 
-        self.spatial_pool = nn.AdaptiveAvgPool2d(1)  # or MaxPool2d or Flatten
+        self.spatial_pool = nn.AdaptiveAvgPool2d( 2 )  # or MaxPool2d or Flatten
         self.tof_post = nn.Sequential(
-            nn.Linear(C, hidden_dim),  # or Conv1D
+            nn.Linear(C * 4, hidden_dim),  # or Conv1D
             nn.ReLU(),
         )
         self.H = H
@@ -270,9 +270,11 @@ class TOFEncoder(nn.Module):
         tof_raw =  tof_raw.reshape(B, T, self.C, self.H, self.W) #[B, T, 5, 8, 8] 
         #tof_raw = tof_raw.permute(0, 2, 1, 3, 4)                
 
-        tof_raw_weighted = tof_raw * self.tof_spatial_weight  # Broadcasting over batch and channel
-        pooled = self.spatial_pool(tof_raw_weighted)  # [B, T, 5, 1, 1]
-        pooled = pooled.squeeze(-1).squeeze(-1)#.permute(0, 2, 1)  # [B, T, 5]
+        tof_raw_weighted = (tof_raw * self.tof_spatial_weight).view(-1, self.C, self.H, self.W)  # Broadcasting over batch and channel
+        #print(tof_raw_weighted.shape)
+        pooled = self.spatial_pool(tof_raw_weighted).view(B, T, -1)  # [B, T, 5 * 2 * 2]
+        #print(pooled.shape)
+        #pooled = pooled.squeeze(-1).squeeze(-1)#.permute(0, 2, 1)  
         tof_raw_feat = self.tof_post(pooled)  # [B, T, hidden_dim]  
 
         if self.norm:
@@ -400,8 +402,8 @@ class GlobalGestureClassifier(nn.Module):
             self.attn_pool = AttentionPooling(hidden_dim)
 
         self.thm_tof_encoder = OptionalEncoder(thm_tof_dim, hidden_dim, norm=norm_TOF_THM)
-        #self.tof_pixels = TOFEncoder(hidden_dim, C = 5, H = 8, W = 8, C_TOF_RAW=C_TOF_RAW, norm=norm_TOF_RAW)
-        self.tof_pixels = TOFEncoderTemporalBeforePool(hidden_dim, C = 5, H = 8, W = 8)
+        self.tof_pixels = TOFEncoder(hidden_dim, C = 5, H = 8, W = 8, C_TOF_RAW=C_TOF_RAW, norm=norm_TOF_RAW)
+        #self.tof_pixels = TOFEncoderTemporalBeforePool(hidden_dim, C = 5, H = 8, W = 8)
 #         self.tof_spatial_weight = nn.Parameter(torch.ones(1, 1, 8, 8))  # Learnable
 #         self.spatial_pool = nn.AdaptiveAvgPool2d(1)  # or MaxPool2d or Flatten
 #         self.tof_post = nn.Sequential(
@@ -450,15 +452,15 @@ class GlobalGestureClassifier(nn.Module):
         else:
             tof_mask = torch.ones( B, T, device = thm_tof.device ) # (~torch.isnan(thm_tof).any(dim=2)).float() #(thm_tof != 0).float() #
 
-        # if tof_raw is None:
-        #     tof_raw = torch.zeros_like(imu)
-        #     tof_raw_mask = torch.zeros(B, T, device=imu.device)
-        # else:
-        #     tof_raw_mask = torch.ones( B, T, device = thm_tof.device )
+        if tof_raw is None:
+            tof_raw = torch.zeros_like(imu)
+            tof_raw_mask = torch.zeros(B, T, device=imu.device)
+        else:
+            tof_raw_mask = torch.ones( B, T, device = thm_tof.device )
 
 
         thm_tof_feat = self.thm_tof_encoder(thm_tof, tof_mask)  # [B, hidden_dim, T]
-        tof_raw_feat = self.tof_pixels(tof_raw) #, tof_raw_mask) # [B, hidden_dim, T]
+        tof_raw_feat = self.tof_pixels(tof_raw, tof_raw_mask) # [B, hidden_dim, T]
 
         gated =  self.gated_fusion([imu_feat, thm_tof_feat, tof_raw_feat])  # [B, hidden_dim, T]
 
@@ -680,7 +682,7 @@ class DeviceRotationAugment:
         unique_subjects = list(self.seqs_by_subject.keys())
         # Assign a consistent random Y angle per subject
         subject_to_angle = {
-            subj:  np.random.uniform(*self.x_rot_range) #, np.random.uniform(*self.y_rot_range)) #np.random.choice(y_range)
+            subj:  (np.random.uniform(*self.x_rot_range), np.random.uniform(*self.y_rot_range)) #np.random.choice(y_range)
             for subj in unique_subjects
         }
 
@@ -695,7 +697,7 @@ class DeviceRotationAugment:
         }
 
         seq_to_angle = {
-            seq_id: subject_to_angle[subj] + random_small_angles_by_subject[subj][i] #, subject_to_angle[subj][1] + random_small_angles_by_subject[subj][i])
+            seq_id: (subject_to_angle[subj][0] + random_small_angles_by_subject[subj][i], subject_to_angle[subj][1] + random_small_angles_by_subject[subj][i])
             for seq_id, (i, subj) in subject_for_seq.items()
         }
 
@@ -707,8 +709,7 @@ class DeviceRotationAugment:
                        seq_id: str,
                        seqs_to_angle) -> np.ndarray:
         x_copy = x.numpy().copy()
-        rot_x = seqs_to_angle.get(seq_id, 0.0)
-        rot_y = rot_x
+        rot_x, rot_y = seqs_to_angle.get(seq_id, (0.0, 0.0))
         if ax == 'x':
             rot = R.from_euler(ax, rot_x, degrees=True)
         if ax == 'y':
@@ -804,9 +805,9 @@ class DeviceRotationAugment:
             # Reverse time (assuming time is dimension 0)
             x_rotated = []
             axes_choice = np.array(axes)
-            for i in range(self.iter): #self.iter
+            for ax in axes_choice: #self.iter
                 #if (np.random.random() < self.p_rotation) and (len(axes_choice) > 0):
-                ax = axes_choice[i]  #np.random.choice(axes_choice) # ##
+                #ax = axes_choice[i]  #np.random.choice(axes_choice) # ##
                 x_rotated.append(self.apply_rotation(xx, ax, seq_id, seqs_to_angle)) # subject_id, subject_to_angle)
                     #axes_choice = np.delete(axes_choice, np.where(axes_choice == ax)) 
             if len(x_rotated) > 0:

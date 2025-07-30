@@ -36,16 +36,16 @@ BATCH_SIZE = 64
 EPOCHS = 160
 HIDDEN_DIM = 128
 PATIENCE = 45
-ALPHA = 0.4
-LR = 1e-3
+ALPHA = 0.45
+LR = 0.8e-3
 
 p_dropout = 0.48 #0.42
-p_jitter= 0.0 #0.98
-p_moda = 0.0 #0.39
+p_jitter= 0.98
+p_moda = 0.4
 p_rotation = 1.1
 small_rotation = 2.
 x_max_angle = 30.
-
+y_max_angle = 15.
 
 normalisation_TOF_RAW = False
 normalisation_TOF_THM = True
@@ -53,7 +53,11 @@ attention_for_fusion = False
 attention_pooled = True
 C_TOF_RAW = False
 ADD_TOF_TO_THM = True
+
 SCHEDULER = True
+patience_scheduler = 8
+factor_scheduler = 0.7
+
 
 GAMMA = 0.0
 LAMB = 0.0
@@ -229,13 +233,16 @@ all_parameters = {
     "imu_dim":len(selected_features),
     "thm_tof_dim":len(selected_tof),
     "tof_raw_dim":len(raw_tof_sorted),
-    "scheduler": SCHEDULER,
+    "scheduler": SCHEDULER if SCHEDULER else None,
+    "factor_scheduler": factor_scheduler if SCHEDULER else None,
+    "patience_scheduler": patience_scheduler if SCHEDULER else None,
     "p_dropout": p_dropout,
     "p_jitter": p_jitter,
     "p_moda": p_moda,
     "p_rotation": p_rotation,
     "small_rotation": small_rotation, 
     "x_max_angle": x_max_angle,
+    "y_max_angle": y_max_angle,
 }
 
 # ------------------------------- DEMO DATA ---------------------------------
@@ -307,9 +314,10 @@ for fold, (train_idx, val_idx) in enumerate(sgkf.split(X, y, groups)):
                             seqs_by_subject, selected_features, 
                             p_rotation=p_rotation, 
                             small_rotation=small_rotation, 
-                            x_rot_range=(0., x_max_angle)
+                            x_rot_range=(0., x_max_angle),
+                            y_rot_range=(0., y_max_angle)
                             )
-        X_tr, y_tr, count = rotation_augmented(axes=['z', 'x'])
+        X_tr, y_tr, count = rotation_augmented(axes=['z', 'x', 'y'])
         print(f"number of additional rotated features samples: {count}")
         print(f"shape of training data after augmentation (X, y): {X_tr.shape, y_tr.shape}\n")
 
@@ -387,7 +395,7 @@ for fold, (train_idx, val_idx) in enumerate(sgkf.split(X, y, groups)):
 
         optimizer = optim.Adam(model.parameters(), lr=LR) # OPTIMIZER  weight_decay=WD
         if SCHEDULER:
-            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.6, patience=8, verbose=True)
+            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=factor_scheduler, patience=patience_scheduler, verbose=True)
         else:
             scheduler = None
 
