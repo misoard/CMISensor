@@ -37,11 +37,11 @@ EPOCHS = 160
 HIDDEN_DIM = 128
 PATIENCE = 45
 ALPHA = 0.45
-LR = 0.8e-3
+LR = 1e-3
 
 p_dropout = 0.48 #0.42
-p_jitter= 0.98
-p_moda = 0.4
+p_jitter= 0.0 #0.98
+p_moda = 0.4 #0.4
 p_rotation = 1.1
 small_rotation = 2.
 x_max_angle = 30.
@@ -353,7 +353,7 @@ for fold, (train_idx, val_idx) in enumerate(sgkf.split(X, y, groups)):
 
         train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, sampler=tracking_sampler)
     
-        val_ds = SensorDataset(X_val, y_val, imu_dim = 7, training=False) ### VALIDATION DATA (NO AUG, NO MixUp)
+        val_ds = SensorDataset(X_val, y_val, imu_dim = len(idx_imu), training=False) ### VALIDATION DATA (NO AUG, NO MixUp)
         val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False)
 
 
