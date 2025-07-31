@@ -253,9 +253,9 @@ class TOFEncoder(nn.Module):
         else:
             self.tof_spatial_weight = nn.Parameter(torch.ones(1, 1, H, W))  # Learnable
 
-        self.spatial_pool = nn.AdaptiveAvgPool2d( 2 )  # or MaxPool2d or Flatten
+        self.spatial_pool = nn.AdaptiveAvgPool2d( 1 )  # or MaxPool2d or Flatten
         self.tof_post = nn.Sequential(
-            nn.Linear(C * 4, hidden_dim),  # or Conv1D
+            nn.Linear(C , hidden_dim),  # or Conv1D
             nn.ReLU(),
         )
         self.H = H
@@ -270,11 +270,11 @@ class TOFEncoder(nn.Module):
         tof_raw =  tof_raw.reshape(B, T, self.C, self.H, self.W) #[B, T, 5, 8, 8] 
         #tof_raw = tof_raw.permute(0, 2, 1, 3, 4)                
 
-        tof_raw_weighted = (tof_raw * self.tof_spatial_weight).view(-1, self.C, self.H, self.W)  # Broadcasting over batch and channel
+        tof_raw_weighted = (tof_raw * self.tof_spatial_weight)#.view(-1, self.C, self.H, self.W)  # Broadcasting over batch and channel
         #print(tof_raw_weighted.shape)
-        pooled = self.spatial_pool(tof_raw_weighted).view(B, T, -1)  # [B, T, 5 * 2 * 2]
+        pooled = self.spatial_pool(tof_raw_weighted)#.view(B, T, -1)  # [B, T, 5 * 2 * 2]
         #print(pooled.shape)
-        #pooled = pooled.squeeze(-1).squeeze(-1)#.permute(0, 2, 1)  
+        pooled = pooled.squeeze(-1).squeeze(-1)#.permute(0, 2, 1)  
         tof_raw_feat = self.tof_post(pooled)  # [B, T, hidden_dim]  
 
         if self.norm:

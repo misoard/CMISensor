@@ -1010,6 +1010,8 @@ def save_hparams_and_architecture(hparams: dict, model: torch.nn.Module, file_tx
     with open(file_txt_path, 'w') as f:
 
         f.write("======== COMMENTS ========\n")
+       #f.write("Comment: here I went back to averagePooling = 1 for TOFEncoder")
+
         if not hparams['C_TOF_RAW']:
             f.write("C = 1 for weights TOF RAW (same weights accross all TOF)\n")
         else:

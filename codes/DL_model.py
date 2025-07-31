@@ -31,12 +31,13 @@ N_TRIAL = current_trial
 
 print(f"=============== TRIAL {N_TRIAL} ===============")
 
+
 N_SPLITS = 5
 BATCH_SIZE = 64
 EPOCHS = 160
 HIDDEN_DIM = 128
 PATIENCE = 45
-ALPHA = 0.45
+ALPHA = 0.4
 LR = 1e-3
 
 p_dropout = 0.48 #0.42
