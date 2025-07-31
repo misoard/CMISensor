@@ -31,6 +31,7 @@ N_TRIAL = current_trial
 
 print(f"=============== TRIAL {N_TRIAL} ===============")
 
+data_file =  "train_torch_tensors_from_wrapper_left_corrected_without_TOF_correction.pt"
 
 N_SPLITS = 5
 BATCH_SIZE = 64
@@ -68,7 +69,8 @@ L_IMU = 0.25
 SEED = Config.SEED
 reset_seed(SEED)
 
-file_path_train = os.path.join(Config.EXPORT_DIR, "train_torch_tensors_from_wrapper_left_corrected_without_TOF_correction.pt")
+
+file_path_train = os.path.join(Config.EXPORT_DIR, data_file)
 file_path_cols = os.path.join(Config.EXPORT_DIR, "cols.pkl")
 file_path_splits = os.path.join(Config.EXPORT_DIR, "split_ids.pkl")
 
@@ -210,6 +212,7 @@ class_weight[bfrb_classes] = 2.
 
 # ----------- ALL PARAMETERS TO SAVE IT ---------------
 all_parameters = {
+    "data_file": data_file,
     "SEED": SEED,
     "N_SPLITS": N_SPLITS,
     "BATCH_SIZE": BATCH_SIZE,
