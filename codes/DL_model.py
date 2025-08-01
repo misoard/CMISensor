@@ -40,6 +40,7 @@ HIDDEN_DIM = 128
 PATIENCE = 45
 ALPHA = 0.4
 LR = 1e-3
+SEED_CV_FOLD = 39
 
 p_dropout = 0.48 #0.42
 p_jitter= 0.0 #0.98
@@ -215,6 +216,7 @@ class_weight[bfrb_classes] = 2.
 all_parameters = {
     "data_file": data_file,
     "SEED": SEED,
+    "SEED_CV_FOLD": SEED_CV_FOLD if SEED_CV_FOLD is not None else None,
     "N_SPLITS": N_SPLITS,
     "BATCH_SIZE": BATCH_SIZE,
     "EPOCHS": EPOCHS,
@@ -258,7 +260,7 @@ train_demographics = pd.read_csv(Config.TRAIN_DEMOGRAPHICS_PATH)
 
 # ------------------------------- TRAINING ---------------------------------
 
-sgkf = StratifiedGroupKFold(n_splits=N_SPLITS, shuffle=True, random_state = 39) #STRATIFIED k-Fold by group (subject_id)
+sgkf = StratifiedGroupKFold(n_splits=N_SPLITS, shuffle=True, random_state = SEED_CV_FOLD) #STRATIFIED k-Fold by group (subject_id)
 
 if not ADD_TOF_TO_THM:
     indices_branches['tof'] = []
@@ -407,13 +409,14 @@ for fold, (train_idx, val_idx) in enumerate(sgkf.split(X, y, groups)):
 
         best_score, best_score_imu_only, best_score_imu_tof_thm = train_model(model, train_loader, val_loader, 
                                  optimizer, criterion, 
-                                 EPOCHS, BATCH_SIZE,
+                                 EPOCHS,
                                  DEVICE, 
                                  patience=PATIENCE, 
                                  fold = fold, 
                                  split_indices = indices_branches,
                                  scheduler=scheduler,
-                                 L_IMU= L_IMU
+                                 L_IMU= L_IMU,
+                                 seed_CV_fold = SEED_CV_FOLD
                                  )
         best_scores['mixture'].append(best_score)
         best_scores['imu_only'].append(best_score_imu_only)

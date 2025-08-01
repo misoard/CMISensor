@@ -8,17 +8,18 @@ import os
 def train_model(model, 
                 train_loader, val_loader, 
                 optimizer, criterion, 
-                epochs, batch_size, 
+                epochs, 
                 device, 
+                seed_CV_fold = None,
                 patience = 50, 
                 fold = None, 
                 logger = None, 
                 split_indices = None, 
                 scheduler = None, 
                 hide_val_half = True,
-                L_IMU = 0.2
+                L_IMU = 0.2,
                 ):
-    reset_seed(42)
+    reset_seed(Config.SEED)
     model.to(device)
     early_stopper = EarlyStopping(patience=patience, mode='max', restore_best_weights=True, verbose=True, logger = logger)
     if split_indices is not None:
@@ -142,11 +143,11 @@ def train_model(model,
         if early_stopper.best_score > best_score:
             best_score = early_stopper.best_score
             name = "best_model"
-            if fold is not None:
-                name += f"_fold_{fold}.pth"
+            if (fold is not None) and (seed_CV_fold is not None):
+                name += f"_fold_{fold}_seed_{seed_CV_fold}.pth"
             else:
                 name += ".pth"
-            #torch.save(early_stopper.best_model_state, os.path.join(Config.EXPORT_MODELS_PATH, name ))
+            torch.save(early_stopper.best_model_state, os.path.join(Config.EXPORT_MODELS_PATH, name ))
 
         
         
@@ -162,21 +163,21 @@ def train_model(model,
             if  val_acc_imu_only > best_score_imu_only:
                 best_score_imu_only = val_acc_imu_only
                 name = "best_model_imu_only"
-                if fold is not None:
-                    name += f"_fold_{fold}.pth"
+                if (fold is not None) and (seed_CV_fold is not None):
+                    name += f"_fold_{fold}_seed_{seed_CV_fold}.pth"
                 else:
                     name += ".pth"
-                #torch.save(model.state_dict(), os.path.join(Config.EXPORT_MODELS_PATH, name ))
+                torch.save(model.state_dict(), os.path.join(Config.EXPORT_MODELS_PATH, name ))
         
             ### BEST IMU-TOF-THM MODEL ###
             if  val_acc_all > best_score_imu_tof_thm:
                 best_score_imu_tof_thm = val_acc_all
                 name = "best_model_imu_tof_thm"
-                if fold is not None:
-                    name += f"_fold_{fold}.pth"
+                if (fold is not None) and (seed_CV_fold is not None):
+                    name += f"_fold_{fold}_seed_{seed_CV_fold}.pth"
                 else:
                     name += ".pth"
-                #torch.save(model.state_dict(), os.path.join(Config.EXPORT_MODELS_PATH, name ))
+                torch.save(model.state_dict(), os.path.join(Config.EXPORT_MODELS_PATH, name ))
         
         else:
             if logger is not None:

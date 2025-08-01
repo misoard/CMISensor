@@ -910,15 +910,20 @@ class EnsemblePredictor:
         self.map_classes = None
         self.inverse_map_classes = None
         self.cols = None
-        self._load_models(models_dir)
+        self._load_models(models_dir, seed_CV_fold = params["SEED_CV_FOLD"])
         self._load_processing(processing_dir)
 
-    def _load_models(self, models_dir):
+    def _load_models(self, models_dir, seed_CV_fold = None):
         model_files = {}
-        model_files['hybrid_models'] = sorted(glob.glob(f"{models_dir}/best_model_fold_*.pth"))
-        model_files['imu_only_models'] = sorted(glob.glob(f"{models_dir}/best_model_imu_only_fold_*.pth"))
-        model_files['imu_tof_thm_models'] = sorted(glob.glob(f"{models_dir}/best_model_imu_tof_thm_fold_*.pth"))
-        
+        if seed_CV_fold is None:
+            model_files['hybrid_models'] = sorted(glob.glob(f"{models_dir}/best_model_fold_*.pth"))
+            model_files['imu_only_models'] = sorted(glob.glob(f"{models_dir}/best_model_imu_only_fold_*.pth"))
+            model_files['imu_tof_thm_models'] = sorted(glob.glob(f"{models_dir}/best_model_imu_tof_thm_fold_*.pth"))
+        else:
+            model_files['hybrid_models'] = sorted(glob.glob(f"{models_dir}/best_model_fold_*_{seed_CV_fold}.pth"))
+            model_files['imu_only_models'] = sorted(glob.glob(f"{models_dir}/best_model_imu_only_fold_*_{seed_CV_fold}.pth"))
+            model_files['imu_tof_thm_models'] = sorted(glob.glob(f"{models_dir}/best_model_imu_tof_thm_fold_*_{seed_CV_fold}.pth"))
+            
         for key, models in model_files.items():
             print(f"{len(models)} {' '.join(key.split('_'))} have been found")
         
