@@ -897,7 +897,7 @@ class Augment:
   
 
 class EnsemblePredictor:
-    def __init__(self,  processing_dir, models_dir, device, params):
+    def __init__(self,  processing_dir, models_dir, device, params, use_current_seed_fold = True):
         self.device = device
         self.models = {
             'hybrid_models': [],
@@ -911,7 +911,13 @@ class EnsemblePredictor:
         self.map_classes = None
         self.inverse_map_classes = None
         self.cols = None
-        self._load_models(models_dir, seed_CV_fold = params["SEED_CV_FOLD"])
+
+        if use_current_seed_fold:
+            seed_CV_fold = params["SEED_CV_FOLD"]
+        else:
+            seed_CV_fold = None
+
+        self._load_models(models_dir, seed_CV_fold = seed_CV_fold )
         self._load_processing(processing_dir)
 
     def _load_models(self, models_dir, seed_CV_fold = None):
