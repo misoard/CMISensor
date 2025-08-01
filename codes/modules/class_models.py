@@ -897,7 +897,7 @@ class Augment:
   
 
 class EnsemblePredictor:
-    def __init__(self,  processing_dir, models_dir, device, params, use_current_seed_fold = True):
+    def __init__(self,  processing_dir, models_dir, device, params, use_current_seed_fold = True, by_fold = None):
         self.device = device
         self.models = {
             'hybrid_models': [],
@@ -911,6 +911,7 @@ class EnsemblePredictor:
         self.map_classes = None
         self.inverse_map_classes = None
         self.cols = None
+        self.by_fold  = by_fold
 
         if use_current_seed_fold:
             seed_CV_fold = params["SEED_CV_FOLD"]
@@ -923,16 +924,31 @@ class EnsemblePredictor:
     def _load_models(self, models_dir, seed_CV_fold = None):
         model_files = {}
         if seed_CV_fold is None:
-            model_files['hybrid_models'] = sorted(glob.glob(f"{models_dir}/best_model_fold_*.pth"))
-            model_files['imu_only_models'] = sorted(glob.glob(f"{models_dir}/best_model_imu_only_fold_*.pth"))
-            model_files['imu_tof_thm_models'] = sorted(glob.glob(f"{models_dir}/best_model_imu_tof_thm_fold_*.pth"))
+            if self.by_fold is None:
+                model_files['hybrid_models'] = sorted(glob.glob(f"{models_dir}/best_model_fold_*.pth"))
+                model_files['imu_only_models'] = sorted(glob.glob(f"{models_dir}/best_model_imu_only_fold_*.pth"))
+                model_files['imu_tof_thm_models'] = sorted(glob.glob(f"{models_dir}/best_model_imu_tof_thm_fold_*.pth"))
+            else:
+                model_files['hybrid_models'] = sorted(glob.glob(f"{models_dir}/best_model_fold_{self.by_fold}*.pth"))
+                model_files['imu_only_models'] = sorted(glob.glob(f"{models_dir}/best_model_imu_only_fold_{self.by_fold}*.pth"))
+                model_files['imu_tof_thm_models'] = sorted(glob.glob(f"{models_dir}/best_model_imu_tof_thm_fold_{self.by_fold}*.pth"))          
         else:
-            model_files['hybrid_models'] = sorted(glob.glob(f"{models_dir}/best_model_fold_*_{seed_CV_fold}.pth"))
-            model_files['imu_only_models'] = sorted(glob.glob(f"{models_dir}/best_model_imu_only_fold_*_{seed_CV_fold}.pth"))
-            model_files['imu_tof_thm_models'] = sorted(glob.glob(f"{models_dir}/best_model_imu_tof_thm_fold_*_{seed_CV_fold}.pth"))
-            
+            if self.by_fold is None:
+                model_files['hybrid_models'] = sorted(glob.glob(f"{models_dir}/best_model_fold_*_{seed_CV_fold}.pth"))
+                model_files['imu_only_models'] = sorted(glob.glob(f"{models_dir}/best_model_imu_only_fold_*_{seed_CV_fold}.pth"))
+                model_files['imu_tof_thm_models'] = sorted(glob.glob(f"{models_dir}/best_model_imu_tof_thm_fold_*_{seed_CV_fold}.pth"))
+            else:
+                model_files['hybrid_models'] = sorted(glob.glob(f"{models_dir}/best_model_fold_{self.by_fold}*_{seed_CV_fold}.pth"))
+                model_files['imu_only_models'] = sorted(glob.glob(f"{models_dir}/best_model_imu_only_fold_{self.by_fold}*_{seed_CV_fold}.pth"))
+                model_files['imu_tof_thm_models'] = sorted(glob.glob(f"{models_dir}/best_model_imu_tof_thm_fold_{self.by_fold}*_{seed_CV_fold}.pth"))      
+
         for key, models in model_files.items():
             print(f"{len(models)} {' '.join(key.split('_'))} have been found")
+            for i, model in enumerate(models):
+                if i < len(models) - 1:
+                    print(f"- model {i}: {model}")
+                else:
+                    print(f"- model {i}: {model}\n")
         
         for key, models in model_files.items():
             for model_file in models:
@@ -1046,17 +1062,19 @@ class EnsemblePredictor:
         #print(f"sequence has been scaled and padded. shape (1, T, F): {seq.shape}")
         return seq.to(self.device)
 
-    def predict(self, torch_seq, by_fold = None, models_to_use = ['hybrid_models', 'imu_only_models', 'imu_tof_thm_models']):
+    def predict(self, torch_seq, models_to_use = ['hybrid_models', 'imu_only_models', 'imu_tof_thm_models'], weights = None):
     # torch_seq: [N, ...]  (N = batch size)
 
-        weights_models = {
-            'hybrid_models': 1.,
-            'imu_only_models': 0.75,
-            'imu_tof_thm_models': 0.5
-            }
-        
-        weights = {name: weights_models[name] for name in models_to_use}
-        weights = {name: w/sum(weights.values()) for name, w in weights.items()}
+        if weights is None:
+            weights_models = {
+                'hybrid_models': 1.,
+                'imu_only_models': 0.75,
+                'imu_tof_thm_models': 0.5
+                }
+            
+            weights = {name: weights_models[name] for name in models_to_use}
+            weights = {name: w/sum(weights.values()) for name, w in weights.items()}
+
 
         indices_branches = {
             'imu': np.arange(self.params['imu_dim']), 
@@ -1066,39 +1084,37 @@ class EnsemblePredictor:
 
         pred_by_model = {model_type: [] for model_type in models_to_use}
 
-
-        if by_fold is None:
             
-            for key, models in self.models.items():
-                if key in models_to_use:
-                    for model in models:
-                        model.eval()
-                        with torch.no_grad():
-                            output, _ =  model(
-                                torch_seq[:, :, indices_branches['imu']], 
-                                torch_seq[:, :, indices_branches['thm_tof']], 
-                                torch_seq[:, :, indices_branches['tof_raw']]
-                                )  # [N, num_classes]
-                            probs = F.softmax(output, dim=1).cpu().numpy()  # [N, num_classes]
-                            pred_by_model[key].append(probs)
-                else:
-                    continue
+        for key, models in self.models.items():
+            if key in models_to_use:
+                for model in models:
+                    model.eval()
+                    with torch.no_grad():
+                        output, _ =  model(
+                            torch_seq[:, :, indices_branches['imu']], 
+                            torch_seq[:, :, indices_branches['thm_tof']], 
+                            torch_seq[:, :, indices_branches['tof_raw']]
+                            )  # [N, num_classes]
+                        probs = F.softmax(output, dim=1).cpu().numpy()  # [N, num_classes]
+                        pred_by_model[key].append(probs)
+            else:
+                continue
 
             # Merge predictions
-            N, num_classes = pred_by_model[models_to_use[0]][0].shape
-            merged_probs = np.zeros((N, num_classes))
+        N, num_classes = pred_by_model[models_to_use[0]][0].shape
+        merged_probs = np.zeros((N, num_classes))
 
-            for key, pred_list in pred_by_model.items():
-                if not pred_list:
-                    continue
-                stacked = np.stack(pred_list, axis=0)  # [num_models, N, num_classes]
-                avg_probs = np.mean(stacked, axis=0)   # [N, num_classes]
-                merged_probs += weights[key] * avg_probs
+        for key, pred_list in pred_by_model.items():
+            if not pred_list:
+                continue
+            stacked = np.stack(pred_list, axis=0)  # [num_models, N, num_classes]
+            avg_probs = np.mean(stacked, axis=0)   # [N, num_classes]
+            merged_probs += weights[key] * avg_probs
 
 
-            # Final prediction by argmax
-            preds = merged_probs.argmax(axis=1)
-            final_preds = [str(self.map_classes[pred]) for pred in preds]  # [N]
+        # Final prediction by argmax
+        preds = merged_probs.argmax(axis=1)
+        final_preds = [str(self.map_classes[pred]) for pred in preds]  # [N]
 
             #     for model in models:
             #         model.eval()
@@ -1112,37 +1128,7 @@ class EnsemblePredictor:
             #     most_common_prediction = Counter(sample_preds).most_common(1)[0][0]
             #     final_preds.append(str(self.map_classes[most_common_prediction]))
 
-        else:      
-            for key, models in self.models.items():
-                if key in models_to_use:
-                    model = models[by_fold]
-                    model.eval()
-                    with torch.no_grad():
-                        output, _ =  model(
-                                torch_seq[:, :, indices_branches['imu']], 
-                                torch_seq[:, :, indices_branches['thm_tof']], 
-                                torch_seq[:, :, indices_branches['tof_raw']]
-                                )  # [N, num_classes]
-                        probs = F.softmax(output, dim=1).cpu().numpy()  # [N, num_classes]
-                        pred_by_model[key].append(probs)
-                else:
-                    continue
 
-                # Merge predictions
-            print(pred_by_model)
-            N, num_classes = pred_by_model[models_to_use[0]][0].shape
-            merged_probs = np.zeros((N, num_classes))
-
-            for key, pred_list in pred_by_model.items():
-                if not pred_list:
-                    continue
-                stacked = np.stack(pred_list, axis=0)  # [num_models, N, num_classes]
-                avg_probs = np.mean(stacked, axis=0)   # [N, num_classes]
-                merged_probs += weights[key] * avg_probs
-
-                # Final prediction by argmax
-            preds = merged_probs.argmax(axis=1)
-            final_preds = [str(self.map_classes[pred]) for pred in preds]  # [N]
 
             # else:
             #     model = self.models['hybrid'][by_fold]
