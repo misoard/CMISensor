@@ -1037,32 +1037,35 @@ class EnsemblePredictor:
         #print(f"sequence has been scaled and padded. shape (1, T, F): {seq.shape}")
         return seq.to(self.device)
 
-    def predict(self, torch_seq, by_fold = None):
+    def predict(self, torch_seq, by_fold = None, models_to_use = ['hybrid_models', 'imu_only_models', 'imu_tof_thm_models']):
     # torch_seq: [N, ...]  (N = batch size)
 
-        if by_fold is None:
-            pred_by_model = {
-                'hybrid_models': [], 
-                'imu_only_models': [], 
-                'imu_tof_thm_models': []
-                }
-            
-            weights = {
-                'hybrid_models': 0.44,
-                'imu_only_models': 0.33,
-                'imu_tof_thm_models': 0.22
+        weights_models = {
+            'hybrid_models': 1.,
+            'imu_only_models': 0.75,
+            'imu_tof_thm_models': 0.5
             }
+        
+        weights = {name: weights_models[name] for name in models_to_use}
+        weights = {name: w/sum(weights.values()) for name, w in weights.items()}
 
+        pred_by_model = {model_type: [] for model_type in models_to_use}
+        
+        if by_fold is None:
+            
             for key, models in self.models.items():
-                for model in models:
-                    model.eval()
-                    with torch.no_grad():
-                        output = model(torch_seq)  # [N, num_classes]
-                        probs = F.softmax(output, dim=1).cpu().numpy()  # [N, num_classes]
-                        pred_by_model[key].append(probs)
+                if key in models_to_use:
+                    for model in models:
+                        model.eval()
+                        with torch.no_grad():
+                            output = model(torch_seq)  # [N, num_classes]
+                            probs = F.softmax(output, dim=1).cpu().numpy()  # [N, num_classes]
+                            pred_by_model[key].append(probs)
+                else:
+                    continue
 
             # Merge predictions
-            N, num_classes = pred_by_model['hybrid_models'][0].shape
+            N, num_classes = pred_by_model[models_to_use[0]][0].shape
             merged_probs = np.zeros((N, num_classes))
 
             for key, pred_list in pred_by_model.items():
@@ -1087,20 +1090,45 @@ class EnsemblePredictor:
             # for sample_preds in pred_by_model:
             #     most_common_prediction = Counter(sample_preds).most_common(1)[0][0]
             #     final_preds.append(str(self.map_classes[most_common_prediction]))
-        else:
-            model = self.models['hybrid'][by_fold]
-            model.eval()
-            with torch.no_grad():
-                output = model(torch_seq)  # [N, num_classes]
-                preds = output.argmax(1).cpu().numpy()  # shape: [N]
-            final_preds = [str(self.map_classes[pred]) for pred in preds]
+        else:      
+            for key, models in self.models.items():
+                if key in models_to_use:
+                    model = models[by_fold]
+                    model.eval()
+                    with torch.no_grad():
+                        output = model(torch_seq)  # [N, num_classes]
+                        probs = F.softmax(output, dim=1).cpu().numpy()  # [N, num_classes]
+                        pred_by_model[key].append(probs)
+                else:
+                    continue
+
+                # Merge predictions
+            N, num_classes = pred_by_model[models_to_use[0]][0].shape
+            merged_probs = np.zeros((N, num_classes))
+
+            for key, pred_list in pred_by_model.items():
+                if not pred_list:
+                    continue
+                stacked = np.stack(pred_list, axis=0)  # [num_models, N, num_classes]
+                avg_probs = np.mean(stacked, axis=0)   # [N, num_classes]
+                merged_probs += weights[key] * avg_probs
+
+                # Final prediction by argmax
+            preds = merged_probs.argmax(axis=1)
+            final_preds = [str(self.map_classes[pred]) for pred in preds]  # [N]
+
+            # else:
+            #     model = self.models['hybrid'][by_fold]
+            #     model.eval()
+            #     with torch.no_grad():
+            #         output = model(torch_seq)  # [N, num_classes]
+            #         preds = output.argmax(1).cpu().numpy()  # shape: [N]
+            #     final_preds = [str(self.map_classes[pred]) for pred in preds]
         
         if len(final_preds) == 1:
             return final_preds[0]
         else:
             return final_preds  # length N list of mapped predictions
-
-
 
         
 
