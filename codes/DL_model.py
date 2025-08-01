@@ -43,8 +43,8 @@ LR = 1e-3
 SEED_CV_FOLD = 39
 
 p_dropout = 0.48 #0.42
-p_jitter= 0.0 #0.98
-p_moda = 0.0 #0.4
+p_jitter= 0.2 #0.98
+p_moda = 0.2 #0.4
 p_rotation = 1.1
 small_rotation = 2.
 x_max_angle = 30.
@@ -137,8 +137,9 @@ bfrb_classes = torch.tensor([gesture_mapping[cl] for cl in bfrb_gesture]) ### TA
 # ------------------ SELECT FEATURES AND PREPARE DATA FOR TRAINING ------------------------
 
 all_features = np.concatenate( (cols['imu'], cols['thm'], cols['tof']) ) 
-selected_tof = [f for f in cols['tof'] if 'v' not in f]
-raw_tof = [f for f in cols['tof'] if 'v' in f]
+selected_tof = [f for f in cols['tof'] if ('v' not in f) and ('tof_5' not in f)]
+raw_tof = [f for f in cols['tof'] if ('v' in f) and ('tof_5' not in f)]
+print(raw_tof)
 
 raw_tof_sorted = np.array([f'tof_{i}_v{j}' for i in range(1, 6) for j in range(64)])
 check_all_pixels = np.array([f in raw_tof for f in raw_tof_sorted]   )            ### THM Features for later
@@ -154,7 +155,8 @@ raw_tof_sorted = list(raw_tof_sorted[check_all_pixels])
 idx_imu = [np.where(all_features == f)[0][0] for f in selected_features]    ### select features from selected_features above
 idx_tof = [np.where(all_features == f)[0][0] for f in selected_tof]                   ### TOF Features for later
 idx_raw_tof = [np.where(all_features == f)[0][0] for f in raw_tof_sorted]                   ### TOF Features for later
-idx_thm = [np.where(all_features == f)[0][0] for f in cols['thm']]               ### THM Features for later
+idx_thm = [np.where(all_features == f)[0][0] for f in cols['thm'] if 'thm_5' not in f]               ### THM Features for later
+
 
 idx_all = idx_imu + idx_thm + idx_tof + idx_raw_tof
 indices_branches = {
@@ -231,7 +233,7 @@ all_parameters = {
     "add_tof_features_to_thm": ADD_TOF_TO_THM,
     "C_TOF_RAW": C_TOF_RAW,
     "IMU_FEATURES": selected_features,
-    "THM-TOF FEATURES": selected_tof,
+    "THM-TOF FEATURES": selected_tof + [f for f in cols['thm'] if 'thm_5' not in f],
     "TOF-RAW FEATURES": raw_tof_sorted,
     "loss_GAMMA": GAMMA,
     "loss_LAMBDA": LAMB,
