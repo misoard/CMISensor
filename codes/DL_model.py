@@ -141,7 +141,7 @@ selected_tof = [f for f in cols['tof'] if ('v' not in f) and ('tof_5' not in f)]
 raw_tof = [f for f in cols['tof'] if ('v' in f) and ('tof_5' not in f)]
 print(raw_tof)
 
-raw_tof_sorted = np.array([f'tof_{i}_v{j}' for i in range(1, 6) for j in range(64)])
+raw_tof_sorted = np.array([f'tof_{i}_v{j}' for i in range(1, 5) for j in range(64)])
 check_all_pixels = np.array([f in raw_tof for f in raw_tof_sorted]   )            ### THM Features for later
 
 if not np.all(check_all_pixels):

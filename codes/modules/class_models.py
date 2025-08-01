@@ -1005,10 +1005,10 @@ class EnsemblePredictor:
             idx_imu = [np.where(self.features == f)[0][0] for f in imu_features]    ### select features from selected_features above
             np_seq_features = np_seq_features[:, idx_imu]
         else:
-            raw_tof = [f for f in self.cols['tof'] if 'v' in f]
-            selected_tof = [f for f in self.cols['tof'] if 'v' not in f]
+            selected_tof = [f for f in self.cols['tof'] if ('v' not in f) and ('tof_5' not in f)]
+            raw_tof = [f for f in self.cols['tof'] if ('v' in f) and ('tof_5' not in f)]
 
-            raw_tof_sorted = np.array([f'tof_{i}_v{j}' for i in range(1, 6) for j in range(64)])
+            raw_tof_sorted = np.array([f'tof_{i}_v{j}' for i in range(1, 5) for j in range(64)])
             check_all_pixels = np.array([f in raw_tof for f in raw_tof_sorted]   )            ### THM Features for later
 
             if not np.all(check_all_pixels):
@@ -1018,7 +1018,8 @@ class EnsemblePredictor:
             idx_imu = [np.where(self.features == f)[0][0] for f in imu_features]    ### select features from selected_features above
             idx_tof = [np.where(self.features == f)[0][0] for f in selected_tof]                   ### TOF Features for later
             idx_raw_tof = [np.where(self.features == f)[0][0] for f in raw_tof_sorted]                   ### TOF Features for later
-            idx_thm = [np.where(self.features == f)[0][0] for f in self.cols['thm']]               ### THM Features for later
+            idx_thm = [np.where(self.features == f)[0][0] for f in self.cols['thm'] if 'thm_5' not in f]               ### THM Features for later
+            #idx_thm = [np.where(self.features == f)[0][0] for f in self.cols['thm']]               ### THM Features for later
             
             idx_all = idx_imu + idx_thm + idx_tof + idx_raw_tof
             np_seq_features = np_seq_features[:, idx_all]
