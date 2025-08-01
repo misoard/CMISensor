@@ -1031,6 +1031,8 @@ class EnsemblePredictor:
             np_seq_features = np_seq_features[:, idx_all]
 
         seq = torch.tensor(np_seq_features, dtype=torch.float32)
+        seq = torch.nan_to_num(seq, nan=0.0)
+
         length = seq.size(0)
         # Truncate
         if length >= pad_length:
