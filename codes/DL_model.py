@@ -43,11 +43,12 @@ LR = 1e-3
 
 p_dropout = 0.48 #0.42
 p_jitter= 0.0 #0.98
-p_moda = 0.4 #0.4
+p_moda = 0.0 #0.4
 p_rotation = 1.1
 small_rotation = 2.
 x_max_angle = 30.
 y_max_angle = 15.
+axes_rotation = ['z', 'x', 'y']
 
 normalisation_TOF_RAW = False
 normalisation_TOF_THM = True
@@ -247,6 +248,7 @@ all_parameters = {
     "small_rotation": small_rotation, 
     "x_max_angle": x_max_angle,
     "y_max_angle": y_max_angle,
+    "axes_rotation": axes_rotation
 }
 
 # ------------------------------- DEMO DATA ---------------------------------
@@ -321,7 +323,7 @@ for fold, (train_idx, val_idx) in enumerate(sgkf.split(X, y, groups)):
                             x_rot_range=(0., x_max_angle),
                             y_rot_range=(0., y_max_angle)
                             )
-        X_tr, y_tr, count = rotation_augmented(axes=['z', 'x', 'y'])
+        X_tr, y_tr, count = rotation_augmented(axes = axes_rotation)
         print(f"number of additional rotated features samples: {count}")
         print(f"shape of training data after augmentation (X, y): {X_tr.shape, y_tr.shape}\n")
 
