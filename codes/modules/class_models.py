@@ -894,7 +894,8 @@ class Augment:
 
         x = self.sensor_dropout(x, imu_dim)
         return x
-    
+  
+
 class EnsemblePredictor:
     def __init__(self,  processing_dir, models_dir, device, params):
         self.device = device
@@ -947,7 +948,7 @@ class EnsemblePredictor:
                 model.to(self.device)
                 model.eval()
                 self.models[key].append(model)
-
+  
     def _load_processing(self, processing_dir):
         self.scaler = joblib.load(os.path.join(processing_dir, "scaler.pkl"))
         self.label_encoder = joblib.load(os.path.join(processing_dir, "label_encoder.pkl"))
@@ -999,7 +1000,7 @@ class EnsemblePredictor:
             'linear_acc_x', 'linear_acc_y', 'linear_acc_z', 
             'ang_vel_x', 'ang_vel_y', 'ang_vel_z', 'ang_dist',
             'phase_adj'
-            ] 
+            ]               
 
         if is_imu_only:
             idx_imu = [np.where(self.features == f)[0][0] for f in imu_features]    ### select features from selected_features above
@@ -1018,8 +1019,7 @@ class EnsemblePredictor:
             idx_imu = [np.where(self.features == f)[0][0] for f in imu_features]    ### select features from selected_features above
             idx_tof = [np.where(self.features == f)[0][0] for f in selected_tof]                   ### TOF Features for later
             idx_raw_tof = [np.where(self.features == f)[0][0] for f in raw_tof_sorted]                   ### TOF Features for later
-            idx_thm = [np.where(self.features == f)[0][0] for f in self.cols['thm'] if 'thm_5' not in f]               ### THM Features for later
-            #idx_thm = [np.where(self.features == f)[0][0] for f in self.cols['thm']]               ### THM Features for later
+            idx_thm = [np.where(self.features == f)[0][0] for f in self.cols['thm'] if 'thm_5' not in f]               ### THM Features for later           ### THM Features for later
             
             idx_all = idx_imu + idx_thm + idx_tof + idx_raw_tof
             np_seq_features = np_seq_features[:, idx_all]
@@ -1050,8 +1050,15 @@ class EnsemblePredictor:
         weights = {name: weights_models[name] for name in models_to_use}
         weights = {name: w/sum(weights.values()) for name, w in weights.items()}
 
+        indices_branches = {
+            'imu': np.arange(self.params['imu_dim']), 
+            'thm_tof': np.arange(self.params['imu_dim'],self.params['imu_dim'] + self.params['thm_tof_dim']), 
+            'tof_raw': np.arange(self.params['imu_dim'] + self.params['thm_tof_dim'], self.params['imu_dim'] + self.params['thm_tof_dim'] + self.params['tof_raw_dim'])
+            }
+
         pred_by_model = {model_type: [] for model_type in models_to_use}
-        
+
+
         if by_fold is None:
             
             for key, models in self.models.items():
@@ -1059,7 +1066,11 @@ class EnsemblePredictor:
                     for model in models:
                         model.eval()
                         with torch.no_grad():
-                            output = model(torch_seq)  # [N, num_classes]
+                            output, _ =  model(
+                                torch_seq[:, :, indices_branches['imu']], 
+                                torch_seq[:, :, indices_branches['thm_tof']], 
+                                torch_seq[:, :, indices_branches['tof_raw']]
+                                )  # [N, num_classes]
                             probs = F.softmax(output, dim=1).cpu().numpy()  # [N, num_classes]
                             pred_by_model[key].append(probs)
                 else:
@@ -1076,6 +1087,7 @@ class EnsemblePredictor:
                 avg_probs = np.mean(stacked, axis=0)   # [N, num_classes]
                 merged_probs += weights[key] * avg_probs
 
+
             # Final prediction by argmax
             preds = merged_probs.argmax(axis=1)
             final_preds = [str(self.map_classes[pred]) for pred in preds]  # [N]
@@ -1091,19 +1103,25 @@ class EnsemblePredictor:
             # for sample_preds in pred_by_model:
             #     most_common_prediction = Counter(sample_preds).most_common(1)[0][0]
             #     final_preds.append(str(self.map_classes[most_common_prediction]))
+
         else:      
             for key, models in self.models.items():
                 if key in models_to_use:
                     model = models[by_fold]
                     model.eval()
                     with torch.no_grad():
-                        output = model(torch_seq)  # [N, num_classes]
+                        output, _ =  model(
+                                torch_seq[:, :, indices_branches['imu']], 
+                                torch_seq[:, :, indices_branches['thm_tof']], 
+                                torch_seq[:, :, indices_branches['tof_raw']]
+                                )  # [N, num_classes]
                         probs = F.softmax(output, dim=1).cpu().numpy()  # [N, num_classes]
                         pred_by_model[key].append(probs)
                 else:
                     continue
 
                 # Merge predictions
+            print(pred_by_model)
             N, num_classes = pred_by_model[models_to_use[0]][0].shape
             merged_probs = np.zeros((N, num_classes))
 
@@ -1129,9 +1147,9 @@ class EnsemblePredictor:
         if len(final_preds) == 1:
             return final_preds[0]
         else:
-            return final_preds  # length N list of mapped predictions
+            return final_preds  # length N list of mapped predictions        
 
-        
+
 
 # class EnsemblePredictor:
 #     def __init__(self,  processing_dir, models_dir, device):

@@ -40,7 +40,7 @@ HIDDEN_DIM = 128
 PATIENCE = 45
 ALPHA = 0.4
 LR = 1e-3
-SEED_CV_FOLD = 39
+SEED_CV_FOLD = 42
 
 p_dropout = 0.48 #0.42
 p_jitter= 0.2 #0.98
@@ -148,7 +148,6 @@ if not np.all(check_all_pixels):
     print(f"missing pixel raw data in TOF data: {np.array(raw_tof_sorted)[~check_all_pixels]}")
 
 
-
 raw_tof_sorted = list(raw_tof_sorted[check_all_pixels])
 
 
@@ -240,7 +239,7 @@ all_parameters = {
     "additionnal_IMU_loss": L_IMU,
     "N_CLASSES": len(class_weight),
     "imu_dim":len(selected_features),
-    "thm_tof_dim":len(selected_tof),
+    "thm_tof_dim":len(selected_tof + [f for f in cols['thm'] if 'thm_5' not in f]),
     "tof_raw_dim":len(raw_tof_sorted),
     "scheduler": SCHEDULER if SCHEDULER else None,
     "factor_scheduler": factor_scheduler if SCHEDULER else None,
