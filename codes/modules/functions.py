@@ -2,6 +2,8 @@ import numpy as np
 import warnings
 import pandas as pd
 from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
+
 from IPython.display import display
 from scipy.spatial.transform import Rotation as R
 import os, joblib
@@ -20,6 +22,8 @@ import psutil
 from scipy.signal import welch
 from scipy.stats import entropy
 from scipy.interpolate import griddata
+
+import matplotlib.pyplot as plt
 
 
 warnings.filterwarnings('ignore')
@@ -1077,3 +1081,14 @@ def interpolate_tof_frame(frame, mask):
     grid_x, grid_y = np.meshgrid(np.arange(8), np.arange(8))
     interpolated = griddata(coords, values, (grid_y, grid_x), method='linear', fill_value=0)
     return interpolated
+
+def plot_conf_matrix(y_true, y_pred, class_names=None, normalize=False, title="Confusion Matrix"):
+    y_true = y_true.cpu().numpy() if isinstance(y_true, torch.Tensor) else y_true
+    y_pred = y_pred.cpu().numpy() if isinstance(y_pred, torch.Tensor) else y_pred
+
+    cm = confusion_matrix(y_true, y_pred, normalize='true' if normalize else None)
+    disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=class_names)
+    disp.plot(cmap=plt.cm.Blues, xticks_rotation=90)
+    #plt.title(title)
+    #plt.tight_layout()
+    plt.show()

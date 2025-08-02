@@ -26,7 +26,7 @@ current_trial = last_trial + 1
 with open(file_path_trial, 'w') as f:
     f.write(str(current_trial))
 
-TRAIN = True
+TRAIN = False
 N_TRIAL = current_trial
 
 print(f"=============== TRIAL {N_TRIAL} ===============")
@@ -40,7 +40,7 @@ HIDDEN_DIM = 128
 PATIENCE = 45
 ALPHA = 0.4
 LR = 1e-3
-SEED_CV_FOLD = 42
+SEED_CV_FOLD = 39
 
 p_dropout = 0.48 #0.42
 p_jitter= 0.2 #0.98
@@ -139,7 +139,7 @@ bfrb_classes = torch.tensor([gesture_mapping[cl] for cl in bfrb_gesture]) ### TA
 all_features = np.concatenate( (cols['imu'], cols['thm'], cols['tof']) ) 
 selected_tof = [f for f in cols['tof'] if ('v' not in f) and ('tof_5' not in f)]
 raw_tof = [f for f in cols['tof'] if ('v' in f) and ('tof_5' not in f)]
-print(raw_tof)
+#print(raw_tof)
 
 raw_tof_sorted = np.array([f'tof_{i}_v{j}' for i in range(1, 5) for j in range(64)])
 check_all_pixels = np.array([f in raw_tof for f in raw_tof_sorted]   )            ### THM Features for later
@@ -426,20 +426,136 @@ for fold, (train_idx, val_idx) in enumerate(sgkf.split(X, y, groups)):
         print("---- INFERENCE MODE ----")
         processing_dir = Config.EXPORT_DIR
         models_dir = Config.EXPORT_MODELS_PATH
-        predictor = EnsemblePredictor(processing_dir, models_dir, DEVICE, all_parameters)
+        predictor = EnsemblePredictor(processing_dir, models_dir, DEVICE, all_parameters, use_current_seed_fold = True, by_fold = fold)
         inverse_map_classes = predictor.inverse_map_classes
         #map_classes = predictor.map_classes
+
+        val_ds = SensorDataset(X_val, y_val, imu_dim = len(idx_imu), training=False) ### VALIDATION DATA (NO AUG, NO MixUp)
+        val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False, pin_memory=True)
+
+        X_val = []
+        #y_val = []
+        for inputs, targets in val_loader:
+            B = inputs.shape[0]
+            half = B // 2
+            x_front = inputs[:half]               
+            x_back  = inputs[half:].clone()   
+            x_back[:, :, 14:] = 0.0    
+            inputs = torch.cat([x_front, x_back], dim=0)
+            X_val.extend(inputs)
+            #y_val.extend(targets[half:].argmax(1))
+        X_val = torch.stack(X_val)
+        #y_val = torch.tensor(y_val)
+        #print(y_val.shape)
+        weights = {'hybrid_models': 0.762832869781358, 'imu_only_models': 0.06293110752549734, 'imu_tof_thm_models': 0.1742360226931446}
+        weights = {'hybrid_models': 1., 'imu_only_models': 0., 'imu_tof_thm_models': 0.}
+        weights = {'hybrid_models': 0.8168130556696994, 'imu_only_models': 0.1405671736347406, 'imu_tof_thm_models': 0.042619770695560014} ##seed = 42
         
-        preds_str = predictor.predict(X_val.to(DEVICE), by_fold = fold)
+        preds_str = predictor.predict(X_val.to(DEVICE), weights = weights,  models_to_use = ['hybrid_models', 'imu_only_models', 'imu_tof_thm_models']) #,
         preds_int = [inverse_map_classes[pred_str] for pred_str in preds_str]
         best_score, _, _ = competition_metric(y_val, preds_int)
+        print(best_score)
+        plot_conf_matrix(y_val, preds_int, class_names=gesture_mapping.keys(), normalize=False, title="Confusion Matrix")
     
         best_scores_inference.append(best_score)
 
-print(np.mean(best_scores['mixture']))
 
 if TRAIN:
+    print(np.mean(best_scores['mixture']))
     log_best_scores(best_scores, file_txt_path)
+else:
+    print(np.mean(best_scores_inference))
+
+
+import optuna
+
+OPTUNA = False
+#print(f"Data shape (X, y): {X.shape, y.shape}")
+        #print("---- INFERENCE MODE ----")
+
+def objective(trial):
+    #print("trial:",trial.number)
+
+    
+    sgkf = StratifiedGroupKFold(n_splits=N_SPLITS, shuffle=True, random_state = SEED_CV_FOLD) #STRATIFIED k-Fold by group (subject_id)
+    
+    if not ADD_TOF_TO_THM:
+        indices_branches['tof'] = []
+    
+    train_ids = np.array(split_ids['train']['train_sequence_ids']) #seq_id of data sequences 
+    groups = [split_ids['train']['train_sequence_subject'][seq_id] for seq_id in train_ids] #subject_id of data_sequences
+    
+    # idx_spe_seq = np.where(train_ids == 'SEQ_000007')[0]
+
+    theta = trial.suggest_uniform("theta", 0.0, np.pi / 2.)
+    phi = trial.suggest_uniform("phi", 0.0, np.pi / 2.)
+
+    weights = {
+        'hybrid_models': np.cos(theta) ** 2,
+        'imu_only_models': (np.sin(theta) * np.cos(phi)) ** 2,
+        'imu_tof_thm_models': (np.sin(theta) * np.sin(phi)) ** 2
+        }
+    
+    
+    best_scores_inference = []
+    for fold, (train_idx, val_idx) in enumerate(sgkf.split(X, y, groups)):
+        processing_dir = Config.EXPORT_DIR
+        models_dir = Config.EXPORT_MODELS_PATH
+        predictor = EnsemblePredictor(processing_dir, models_dir, DEVICE, all_parameters, use_current_seed_fold = True, by_fold = fold)
+        inverse_map_classes = predictor.inverse_map_classes
+        
+                
+        #print(f"\n===== FOLD {fold+1}/{N_SPLITS} =====\n")
+        reset_seed(SEED)
+    
+        # Split data
+        X_tr, X_val = X[train_idx], X[val_idx]
+        y_tr, y_val = y[train_idx], y[val_idx]
+
+
+        #map_classes = predictor.map_classes
+
+        val_ds = SensorDataset(X_val, y_val, imu_dim = 7, training=False) ### VALIDATION DATA (NO AUG, NO MixUp)
+        val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False, pin_memory=True)
+        
+        X_val = []
+        #y_val = []
+        for inputs, targets in val_loader:
+            B = inputs.shape[0]
+            half = B // 2
+            x_front = inputs[:half]               
+            x_back  = inputs[half:].clone()   
+            x_back[:, :, 14:] = 0.0    
+            inputs = torch.cat([x_front, x_back], dim=0)
+            X_val.extend(inputs)
+            #y_val.extend(targets[half:].argmax(1))
+        X_val = torch.stack(X_val)
+        #y_val = torch.tensor(y_val)
+        #print(y_val.shape)
+        
+        preds_str = predictor.predict(X_val.to(DEVICE), weights = weights)
+        preds_int = [inverse_map_classes[pred_str] for pred_str in preds_str]
+        best_score, _, _ = competition_metric(y_val, preds_int)
+        best_scores_inference.append(best_score)
+
+    #print(np.mean(best_scores_inference))
+    return np.mean(best_scores_inference)
+
+if OPTUNA: 
+    study_name = "tune_models"
+    study = optuna.create_study(direction="maximize",study_name=study_name)
+    study.optimize(objective, n_trials = 100, n_jobs = 1)
+    
+    print("Best validation score:", study.best_value)
+    print("Best hyperparameters:", study.best_params)
+    
+    theta, phi = study.best_params['theta'], study.best_params['phi']
+    weights = {
+            'hybrid_models': np.cos(theta) ** 2,
+            'imu_only_models': (np.sin(theta) * np.cos(phi)) ** 2,
+            'imu_tof_thm_models': (np.sin(theta) * np.sin(phi)) ** 2
+            }
+    print("weights:\n", weights)
 
 
 

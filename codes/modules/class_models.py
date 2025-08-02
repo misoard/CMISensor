@@ -1062,7 +1062,7 @@ class EnsemblePredictor:
         #print(f"sequence has been scaled and padded. shape (1, T, F): {seq.shape}")
         return seq.to(self.device)
 
-    def predict(self, torch_seq, models_to_use = ['hybrid_models', 'imu_only_models', 'imu_tof_thm_models'], weights = None):
+    def predict(self, torch_seq, models_to_use = ['hybrid_models', 'imu_only_models', 'imu_tof_thm_models'], weights = None, method = 'vote'): #method = 'avg'
     # torch_seq: [N, ...]  (N = batch size)
 
         if weights is None:
@@ -1084,7 +1084,6 @@ class EnsemblePredictor:
 
         pred_by_model = {model_type: [] for model_type in models_to_use}
 
-            
         for key, models in self.models.items():
             if key in models_to_use:
                 for model in models:
@@ -1096,25 +1095,51 @@ class EnsemblePredictor:
                             torch_seq[:, :, indices_branches['tof_raw']]
                             )  # [N, num_classes]
                         probs = F.softmax(output, dim=1).cpu().numpy()  # [N, num_classes]
-                        pred_by_model[key].append(probs)
+
+                        if method == 'vote':
+                            pred_by_model[key].append(weights[key] * probs)
+                        else:
+                            pred_by_model[key].append( probs)
             else:
                 continue
-
+        
             # Merge predictions
-        N, num_classes = pred_by_model[models_to_use[0]][0].shape
-        merged_probs = np.zeros((N, num_classes))
+        if method == 'vote':
+            N, num_classes = pred_by_model[models_to_use[0]][0].shape
+            num_models = len(pred_by_model[models_to_use[0]])
+            stacked = np.zeros((num_models, N, num_classes))
+        else:
+            N, num_classes = pred_by_model[models_to_use[0]][0].shape
+            merged_probs = np.zeros((N, num_classes))
+
 
         for key, pred_list in pred_by_model.items():
             if not pred_list:
                 continue
-            stacked = np.stack(pred_list, axis=0)  # [num_models, N, num_classes]
-            avg_probs = np.mean(stacked, axis=0)   # [N, num_classes]
-            merged_probs += weights[key] * avg_probs
+            if method == 'vote':
+                stacked += np.stack(pred_list, axis=0)  # [num_models, N, num_classes]
+            else:
+                stacked = np.stack(pred_list, axis=0)  # [num_models, N, num_classes]
+                avg_probs = np.mean(stacked, axis=0)   # [N, num_classes]
+                merged_probs += weights[key] * avg_probs
 
+        
 
         # Final prediction by argmax
-        preds = merged_probs.argmax(axis=1)
-        final_preds = [str(self.map_classes[pred]) for pred in preds]  # [N]
+        if method == 'vote':
+            merged_preds = stacked.argmax(axis=2).T # [N, num_models]
+            final_preds = []
+            for sample_preds in merged_preds:
+                most_common_prediction = Counter(sample_preds).most_common(1)[0][0]
+                final_preds.append(str(self.map_classes[most_common_prediction]))
+        else:
+            preds = merged_probs.argmax(axis=1)
+            final_preds = [str(self.map_classes[pred]) for pred in preds]  # [N]
+
+        # final_preds = []
+        # for sample_preds in merged_preds:
+        #     most_common_prediction = Counter(sample_preds).most_common(1)[0][0]
+        #     final_preds.append(str(self.map_classes[most_common_prediction]))
 
             #     for model in models:
             #         model.eval()
@@ -1123,10 +1148,8 @@ class EnsemblePredictor:
             #             preds = output.argmax(1).cpu().numpy()  # shape: [N]
             #             pred_by_model[key].append(preds)  # list of arrays
             # pred_by_model = list(zip(*pred_by_model))  # shape: [N, num_models]
-            # final_preds = []
-            # for sample_preds in pred_by_model:
-            #     most_common_prediction = Counter(sample_preds).most_common(1)[0][0]
-            #     final_preds.append(str(self.map_classes[most_common_prediction]))
+            
+
 
 
 
