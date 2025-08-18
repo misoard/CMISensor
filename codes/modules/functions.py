@@ -50,6 +50,7 @@ class Config:
         TEST_DEMOGRAPHICS_PATH = "~/.kaggle/sensor-data/test_demographics.csv"
         EXPORT_DIR =  "/Users/mathieuisoard/Documents/kaggle-competitions/CMI-sensor-competition/github/data"                                  
         EXPORT_MODELS_PATH =  "/Users/mathieuisoard/Documents/kaggle-competitions/CMI-sensor-competition/github/models" 
+        EXPORT_MODELS_PATH_BRFB =  "/Users/mathieuisoard/Documents/kaggle-competitions/CMI-sensor-competition/github/models_BRFB"
         OPTUNA_PATH_SAVED =   "/Users/mathieuisoard/Documents/kaggle-competitions/CMI-sensor-competition/github/optuna_data" 
         OPTUNA_PATH_LOGS =   "/Users/mathieuisoard/Documents/kaggle-competitions/CMI-sensor-competition/github/codes/logs_optuna" 
         EXPORT_PARAMS_DIR =   "/Users/mathieuisoard/Documents/kaggle-competitions/CMI-sensor-competition/github/codes/trials" 
@@ -62,6 +63,7 @@ class Config:
         TEST_DEMOGRAPHICS_PATH = "/home/mathieuisoard/remote-github/sensor-data/test_demographics.csv"
         EXPORT_DIR =  "/home/mathieuisoard/remote-github/data"                                  
         EXPORT_MODELS_PATH =  "/home/mathieuisoard/remote-github/models_from_gcloud" 
+        EXPORT_MODELS_PATH_BRFB =  "/home/mathieuisoard/remote-github/models_from_gcloud_BRFB" 
         OPTUNA_PATH_SAVED =   "/home/mathieuisoard/remote-github/optuna_data" 
         OPTUNA_PATH_LOGS =   "/home/mathieuisoard/remote-github/codes/logs_optuna" 
         EXPORT_PARAMS_DIR =   "/home/mathieuisoard/remote-github/codes/trials" 
@@ -72,6 +74,7 @@ class Config:
 
     os.makedirs(EXPORT_DIR, exist_ok=True)                                 
     os.makedirs(EXPORT_MODELS_PATH, exist_ok=True)                                 
+    os.makedirs(EXPORT_MODELS_PATH_BRFB, exist_ok=True)                                 
     os.makedirs(OPTUNA_PATH_SAVED, exist_ok=True)                                 
     os.makedirs(OPTUNA_PATH_LOGS, exist_ok=True) 
     os.makedirs(EXPORT_PARAMS_DIR, exist_ok=True) 

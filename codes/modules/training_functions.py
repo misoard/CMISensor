@@ -1,7 +1,7 @@
 from modules.class_models import *
 from modules.functions import competition_metric, Config
 from modules.functions import DEVICE
-from sklearn.metrics import recall_score
+from sklearn.metrics import recall_score, balanced_accuracy_score
 import os
 
 
@@ -18,10 +18,17 @@ def train_model(model,
                 scheduler = None, 
                 hide_val_half = True,
                 L_IMU = 0.2,
+                BRFB_mode = False
                 ):
     reset_seed(Config.SEED)
     model.to(device)
     early_stopper = EarlyStopping(patience=patience, mode='max', restore_best_weights=True, verbose=True, logger = logger)
+
+    if BRFB_mode:
+        models_path = Config.EXPORT_MODELS_PATH_BRFB
+    else:
+        models_path = Config.EXPORT_MODELS_PATH
+
     if split_indices is not None:
         idx_thm_tof = list(split_indices['thm']) + list(split_indices['tof'])
     
@@ -76,8 +83,11 @@ def train_model(model,
             train_preds.extend(outputs.argmax(1).cpu().numpy())
             train_targets.extend(targets.argmax(1).cpu().numpy())
         
+        if not BRFB_mode:
+            train_acc, _, train_macro_f1  = competition_metric(train_targets, train_preds)
+        else:
+            train_acc = balanced_accuracy_score(train_targets, train_preds)
 
-        train_acc, _, train_macro_f1  = competition_metric(train_targets, train_preds)
 
         # ---- Validation ----
         model.eval()
@@ -133,8 +143,11 @@ def train_model(model,
 
                 # bin_target = targets[:, mask_bfrb_classes].sum(1) #, targets[:, ~mask_bfrb_classes].sum(1)], dim=1) 
                 # bin_targets.extend(bin_target.cpu().numpy())
-                
-        val_acc, _, val_macro_f1 = competition_metric(val_targets['out'], val_preds['out'])     #accuracy_score(val_targets, val_preds)
+        if not BRFB_mode:      
+            val_acc, _, val_macro_f1 = competition_metric(val_targets['out'], val_preds['out'])     #accuracy_score(val_targets, val_preds)
+        else:
+            val_acc = balanced_accuracy_score(val_targets['out'], val_preds['out'])     #accuracy_score(val_targets, val_preds)
+
         early_stopper(val_acc, model)
         if scheduler is not None:
             scheduler.step(val_acc)
@@ -147,18 +160,26 @@ def train_model(model,
                 name += f"_fold_{fold}_seed_{seed_CV_fold}.pth"
             else:
                 name += ".pth"
-            torch.save(early_stopper.best_model_state, os.path.join(Config.EXPORT_MODELS_PATH, name ))
+            torch.save(early_stopper.best_model_state, os.path.join(models_path, name ))
 
         
         
         if split_indices is not None:
-            val_acc_all, _, _ = competition_metric(val_targets['all'], val_preds['all'])    
-            val_acc_imu_only, _, _ = competition_metric(val_targets['imu_only'], val_preds['imu_only'])   
-            if logger is not None:
-                logger.info(f"Epoch {epoch}/{epochs} - Train Loss: {train_loss:.4f}, Acc: {train_acc:.4f}, Macro: {train_macro_f1:.4f} | Val Loss: {val_loss:.4f}, Acc: {val_acc:.4f},  Acc (imu only): {val_acc_imu_only:.4f},  Acc (imu+thm+tof): {val_acc_all:.4f}, Macro: {val_macro_f1:.4f}")
+            if not BRFB_mode:      
+                val_acc_all, _, _ = competition_metric(val_targets['all'], val_preds['all'])    
+                val_acc_imu_only, _, _ = competition_metric(val_targets['imu_only'], val_preds['imu_only'])   
+                if logger is not None:
+                    logger.info(f"Epoch {epoch}/{epochs} - Train Loss: {train_loss:.4f}, Acc: {train_acc:.4f}, Macro: {train_macro_f1:.4f} | Val Loss: {val_loss:.4f}, Acc: {val_acc:.4f},  Acc (imu only): {val_acc_imu_only:.4f},  Acc (imu+thm+tof): {val_acc_all:.4f}, Macro: {val_macro_f1:.4f}")
+                else:
+                    print(f"Epoch {epoch}/{epochs} - Train Loss: {train_loss:.4f}, Acc: {train_acc:.4f}, Macro: {train_macro_f1:.4f} | Val Loss: {val_loss:.4f}, Acc: {val_acc:.4f},  Acc (imu only): {val_acc_imu_only:.4f},   Acc (imu+thm+tof): {val_acc_all:.4f},  Macro: {val_macro_f1:.4f}")
             else:
-                print(f"Epoch {epoch}/{epochs} - Train Loss: {train_loss:.4f}, Acc: {train_acc:.4f}, Macro: {train_macro_f1:.4f} | Val Loss: {val_loss:.4f}, Acc: {val_acc:.4f},  Acc (imu only): {val_acc_imu_only:.4f},   Acc (imu+thm+tof): {val_acc_all:.4f},  Macro: {val_macro_f1:.4f}")
-        
+                val_acc_all = balanced_accuracy_score(val_targets['all'], val_preds['all'])    
+                val_acc_imu_only = balanced_accuracy_score(val_targets['imu_only'], val_preds['imu_only'])   
+                if logger is not None:
+                    logger.info(f"Epoch {epoch}/{epochs} - Train Loss: {train_loss:.4f}, Acc: {train_acc:.4f} | Val Loss: {val_loss:.4f}, Acc: {val_acc:.4f},  Acc (imu only): {val_acc_imu_only:.4f},  Acc (imu+thm+tof): {val_acc_all:.4f}")
+                else:
+                    print(f"Epoch {epoch}/{epochs} - Train Loss: {train_loss:.4f}, Acc: {train_acc:.4f} | Val Loss: {val_loss:.4f}, Acc: {val_acc:.4f},  Acc (imu only): {val_acc_imu_only:.4f},   Acc (imu+thm+tof): {val_acc_all:.4f}")
+
             ### BEST IMU-ONLY MODEL ###
             if  val_acc_imu_only > best_score_imu_only:
                 best_score_imu_only = val_acc_imu_only
@@ -167,7 +188,7 @@ def train_model(model,
                     name += f"_fold_{fold}_seed_{seed_CV_fold}.pth"
                 else:
                     name += ".pth"
-                torch.save(model.state_dict(), os.path.join(Config.EXPORT_MODELS_PATH, name ))
+                torch.save(model.state_dict(), os.path.join(models_path, name ))
         
             ### BEST IMU-TOF-THM MODEL ###
             if  val_acc_all > best_score_imu_tof_thm:
@@ -177,7 +198,7 @@ def train_model(model,
                     name += f"_fold_{fold}_seed_{seed_CV_fold}.pth"
                 else:
                     name += ".pth"
-                torch.save(model.state_dict(), os.path.join(Config.EXPORT_MODELS_PATH, name ))
+                torch.save(model.state_dict(), os.path.join(models_path, name ))
         
         else:
             if logger is not None:

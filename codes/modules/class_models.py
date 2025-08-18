@@ -402,7 +402,7 @@ class GlobalGestureClassifier(nn.Module):
             self.attn_pool = AttentionPooling(hidden_dim)
 
         self.thm_tof_encoder = OptionalEncoder(thm_tof_dim, hidden_dim, norm=norm_TOF_THM)
-        self.tof_pixels = TOFEncoder(hidden_dim, C = 4, H = 8, W = 8, C_TOF_RAW=C_TOF_RAW, norm=norm_TOF_RAW)
+        self.tof_pixels = TOFEncoder(hidden_dim, C = 5, H = 8, W = 8, C_TOF_RAW=C_TOF_RAW, norm=norm_TOF_RAW)
         #self.tof_pixels = TOFEncoderTemporalBeforePool(hidden_dim, C = 5, H = 8, W = 8)
 #         self.tof_spatial_weight = nn.Parameter(torch.ones(1, 1, 8, 8))  # Learnable
 #         self.spatial_pool = nn.AdaptiveAvgPool2d(1)  # or MaxPool2d or Flatten
@@ -590,20 +590,21 @@ class EarlyStopping:
 
 
 class SensorDataset(Dataset):
-    def __init__(self, X, y, imu_dim, alpha = 0., augment = None, training = True):
+    def __init__(self, X, y, imu_dim, num_classes, alpha = 0., augment = None, training = True):
         self.X = torch.tensor(X, dtype=torch.float32)
         self.y = torch.tensor(y, dtype=torch.long)
         self.alpha = alpha
         self.augment = augment
         self.training = training
         self.imu_dim = imu_dim
+        self.num_classes = num_classes
 
     def __len__(self):
         return len(self.X) 
 
     def __getitem__(self, idx):
         x1, y1 = self.X[idx], self.y[idx]
-        y1_onehot = torch.nn.functional.one_hot(y1, num_classes=18).float()
+        y1_onehot = torch.nn.functional.one_hot(y1, num_classes=self.num_classes).float()
 
         if self.training and self.augment:
             x1 = x1.numpy().copy()
@@ -619,7 +620,7 @@ class SensorDataset(Dataset):
                 x2 = self.augment(x2, imu_dim=self.imu_dim)
                 x2 = torch.tensor(x2, dtype=torch.float32)
 
-            y2_onehot = torch.nn.functional.one_hot(y2, num_classes=18).float()
+            y2_onehot = torch.nn.functional.one_hot(y2, num_classes=self.num_classes).float()
 
             # Generate lambda from Beta distribution and ensure alpha > 0.
             lam = np.random.beta(self.alpha, self.alpha)

@@ -26,7 +26,7 @@ current_trial = last_trial + 1
 with open(file_path_trial, 'w') as f:
     f.write(str(current_trial))
 
-TRAIN = False
+TRAIN = True
 N_TRIAL = current_trial
 
 print(f"=============== TRIAL {N_TRIAL} ===============")
@@ -40,7 +40,7 @@ HIDDEN_DIM = 128
 PATIENCE = 45
 ALPHA = 0.4
 LR = 1e-3
-SEED_CV_FOLD = 39
+SEED_CV_FOLD = 42
 
 p_dropout = 0.48 #0.42
 p_jitter= 0.2 #0.98
@@ -65,7 +65,7 @@ factor_scheduler = 0.7
 
 GAMMA = 0.0
 LAMB = 0.0
-L_IMU = 0.25
+L_IMU = 0.3
 
 
 SEED = Config.SEED
@@ -137,11 +137,11 @@ bfrb_classes = torch.tensor([gesture_mapping[cl] for cl in bfrb_gesture]) ### TA
 # ------------------ SELECT FEATURES AND PREPARE DATA FOR TRAINING ------------------------
 
 all_features = np.concatenate( (cols['imu'], cols['thm'], cols['tof']) ) 
-selected_tof = [f for f in cols['tof'] if ('v' not in f) and ('tof_5' not in f)]
-raw_tof = [f for f in cols['tof'] if ('v' in f) and ('tof_5' not in f)]
+selected_tof = [f for f in cols['tof'] if ('v' not in f)] # and ('tof_5' not in f)
+raw_tof = [f for f in cols['tof'] if ('v' in f) ] #and ('tof_5' not in f)
 #print(raw_tof)
 
-raw_tof_sorted = np.array([f'tof_{i}_v{j}' for i in range(1, 5) for j in range(64)])
+raw_tof_sorted = np.array([f'tof_{i}_v{j}' for i in range(1, 6) for j in range(64)])
 check_all_pixels = np.array([f in raw_tof for f in raw_tof_sorted]   )            ### THM Features for later
 
 if not np.all(check_all_pixels):
@@ -154,7 +154,7 @@ raw_tof_sorted = list(raw_tof_sorted[check_all_pixels])
 idx_imu = [np.where(all_features == f)[0][0] for f in selected_features]    ### select features from selected_features above
 idx_tof = [np.where(all_features == f)[0][0] for f in selected_tof]                   ### TOF Features for later
 idx_raw_tof = [np.where(all_features == f)[0][0] for f in raw_tof_sorted]                   ### TOF Features for later
-idx_thm = [np.where(all_features == f)[0][0] for f in cols['thm'] if 'thm_5' not in f]               ### THM Features for later
+idx_thm = [np.where(all_features == f)[0][0] for f in cols['thm']]  # if 'thm_5' not in f              ### THM Features for later
 
 
 idx_all = idx_imu + idx_thm + idx_tof + idx_raw_tof
@@ -344,7 +344,7 @@ for fold, (train_idx, val_idx) in enumerate(sgkf.split(X, y, groups)):
         )
         #########################################
 
-        train_ds = SensorDataset(X_tr, y_tr, imu_dim = len(idx_imu), alpha=ALPHA, augment=augmenter)  ### TRAINING ROTATION AUGMENTED DATA WITH MixUp \alpha 
+        train_ds = SensorDataset(X_tr, y_tr, imu_dim = len(idx_imu), num_classes = len(class_weight), alpha=ALPHA, augment=augmenter)  ### TRAINING ROTATION AUGMENTED DATA WITH MixUp \alpha 
 
 
         # CLASS IMBALANCE handling 
@@ -362,7 +362,7 @@ for fold, (train_idx, val_idx) in enumerate(sgkf.split(X, y, groups)):
 
         train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, sampler=tracking_sampler)
     
-        val_ds = SensorDataset(X_val, y_val, imu_dim = len(idx_imu), training=False) ### VALIDATION DATA (NO AUG, NO MixUp)
+        val_ds = SensorDataset(X_val, y_val, imu_dim = len(idx_imu), num_classes = len(class_weight), training=False) ### VALIDATION DATA (NO AUG, NO MixUp)
         val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False)
 
 
@@ -430,7 +430,7 @@ for fold, (train_idx, val_idx) in enumerate(sgkf.split(X, y, groups)):
         inverse_map_classes = predictor.inverse_map_classes
         #map_classes = predictor.map_classes
 
-        val_ds = SensorDataset(X_val, y_val, imu_dim = len(idx_imu), training=False) ### VALIDATION DATA (NO AUG, NO MixUp)
+        val_ds = SensorDataset(X_val, y_val, imu_dim = len(idx_imu), num_classes = len(class_weight), training=False) ### VALIDATION DATA (NO AUG, NO MixUp)
         val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False, pin_memory=True)
 
         X_val = []
@@ -515,7 +515,7 @@ def objective(trial):
 
         #map_classes = predictor.map_classes
 
-        val_ds = SensorDataset(X_val, y_val, imu_dim = 7, training=False) ### VALIDATION DATA (NO AUG, NO MixUp)
+        val_ds = SensorDataset(X_val, y_val, imu_dim = 7, num_classes = len(class_weight), training=False) ### VALIDATION DATA (NO AUG, NO MixUp)
         val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False, pin_memory=True)
         
         X_val = []
