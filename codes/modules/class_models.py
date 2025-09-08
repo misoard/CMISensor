@@ -402,7 +402,7 @@ class GlobalGestureClassifier(nn.Module):
             self.attn_pool = AttentionPooling(hidden_dim)
 
         self.thm_tof_encoder = OptionalEncoder(thm_tof_dim, hidden_dim, norm=norm_TOF_THM)
-        self.tof_pixels = TOFEncoder(hidden_dim, C = 5, H = 8, W = 8, C_TOF_RAW=C_TOF_RAW, norm=norm_TOF_RAW)
+        self.tof_pixels = TOFEncoder(hidden_dim, C = 4, H = 8, W = 8, C_TOF_RAW=C_TOF_RAW, norm=norm_TOF_RAW)
         #self.tof_pixels = TOFEncoderTemporalBeforePool(hidden_dim, C = 5, H = 8, W = 8)
 #         self.tof_spatial_weight = nn.Parameter(torch.ones(1, 1, 8, 8))  # Learnable
 #         self.spatial_pool = nn.AdaptiveAvgPool2d(1)  # or MaxPool2d or Flatten

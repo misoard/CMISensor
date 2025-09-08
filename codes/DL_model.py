@@ -40,7 +40,7 @@ HIDDEN_DIM = 128
 PATIENCE = 45
 ALPHA = 0.4
 LR = 1e-3
-SEED_CV_FOLD = 42
+SEED_CV_FOLD = 39
 
 p_dropout = 0.48 #0.42
 p_jitter= 0.2 #0.98
@@ -65,7 +65,7 @@ factor_scheduler = 0.7
 
 GAMMA = 0.0
 LAMB = 0.0
-L_IMU = 0.3
+L_IMU = 0.25
 
 
 SEED = Config.SEED
@@ -133,15 +133,17 @@ gesture_mapping = {cl: idx for idx, cl in split_ids['classes'].items()}   ### GE
 bfrb_gesture = CompetitionMetric().target_gestures                        ### TARGET GESTURE CLASSES
 bfrb_classes = torch.tensor([gesture_mapping[cl] for cl in bfrb_gesture]) ### TARGET GESTURE LABELS
 
+augmented_gestures = [ 'Eyebrow - pull hair', 'Eyelash - pull hair',  'Neck - pinch skin', 'Neck - scratch']
+augmented_classes = torch.tensor([gesture_mapping[cl] for cl in augmented_gestures]) ### TARGET GESTURE LABELS
 
 # ------------------ SELECT FEATURES AND PREPARE DATA FOR TRAINING ------------------------
 
 all_features = np.concatenate( (cols['imu'], cols['thm'], cols['tof']) ) 
-selected_tof = [f for f in cols['tof'] if ('v' not in f)] # and ('tof_5' not in f)
-raw_tof = [f for f in cols['tof'] if ('v' in f) ] #and ('tof_5' not in f)
+selected_tof = [f for f in cols['tof'] if ('v' not in f) and ('tof_5' not in f)] # 
+raw_tof = [f for f in cols['tof'] if ('v' in f) and ('tof_5' not in f) ] #
 #print(raw_tof)
 
-raw_tof_sorted = np.array([f'tof_{i}_v{j}' for i in range(1, 6) for j in range(64)])
+raw_tof_sorted = np.array([f'tof_{i}_v{j}' for i in range(1, 5) for j in range(64)])
 check_all_pixels = np.array([f in raw_tof for f in raw_tof_sorted]   )            ### THM Features for later
 
 if not np.all(check_all_pixels):
@@ -154,7 +156,7 @@ raw_tof_sorted = list(raw_tof_sorted[check_all_pixels])
 idx_imu = [np.where(all_features == f)[0][0] for f in selected_features]    ### select features from selected_features above
 idx_tof = [np.where(all_features == f)[0][0] for f in selected_tof]                   ### TOF Features for later
 idx_raw_tof = [np.where(all_features == f)[0][0] for f in raw_tof_sorted]                   ### TOF Features for later
-idx_thm = [np.where(all_features == f)[0][0] for f in cols['thm']]  # if 'thm_5' not in f              ### THM Features for later
+idx_thm = [np.where(all_features == f)[0][0] for f in cols['thm'] if 'thm_5' not in f ]  #              ### THM Features for later
 
 
 idx_all = idx_imu + idx_thm + idx_tof + idx_raw_tof
@@ -205,9 +207,8 @@ print(f"Data shape (X, y): {X.shape, y.shape}")
 # cw_vals = compute_class_weight('balanced', classes=list(split_ids['classes'].keys()), y=y.numpy())  ## Class weights to handle imbalance
 # class_weight = torch.from_numpy(cw_vals).float()                                                    ## class weights as torch tensor
 
-class_weight = 0.7 * torch.ones(len(split_ids['classes'].keys()))
-class_weight[bfrb_classes] = 2.
-
+class_weight = torch.ones(len(split_ids['classes'].keys()))
+class_weight[augmented_classes] = 1.1
 
 #### ---------------- PARAMETERS --------------------
 
@@ -239,7 +240,7 @@ all_parameters = {
     "additionnal_IMU_loss": L_IMU,
     "N_CLASSES": len(class_weight),
     "imu_dim":len(selected_features),
-    "thm_tof_dim":len(selected_tof + [f for f in cols['thm'] if 'thm_5' not in f]),
+    "thm_tof_dim":len(selected_tof + [f for f in cols['thm'] if 'thm_5' not in f ]),
     "tof_raw_dim":len(raw_tof_sorted),
     "scheduler": SCHEDULER if SCHEDULER else None,
     "factor_scheduler": factor_scheduler if SCHEDULER else None,
@@ -338,7 +339,7 @@ for fold, (train_idx, val_idx) in enumerate(sgkf.split(X, y, groups)):
         #     p_moda=0.39, drift_std=0.004, drift_max=0.39    
         # )
         augmenter = Augment(
-            p_jitter=p_jitter, sigma=0.033, scale_range=(0.75,1.16),
+            p_jitter=p_jitter, sigma=0.033, scale_range=(0.75, 1.16),
             p_dropout=p_dropout,
             p_moda=p_moda, drift_std=0.004, drift_max=0.39    
         )
@@ -351,7 +352,7 @@ for fold, (train_idx, val_idx) in enumerate(sgkf.split(X, y, groups)):
         print(" ----------- CLASS INBALANCE SAMPLER (WeightedRandomSampler) ---------") 
         class_counts = np.bincount(y_tr.numpy())
         print(f"Number of samples per class: {Counter(y_tr.numpy())}\n")
-        class_weights_balanced = 1. / class_counts
+        class_weights_balanced = 1. / class_counts * class_weight.numpy()
         sample_weights = class_weights_balanced[y_tr.numpy()]
         sampler = WeightedRandomSampler(weights=sample_weights, num_samples=len(sample_weights) , replacement=True)
         tracking_sampler = TrackingSampler(sampler)
